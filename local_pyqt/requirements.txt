@@ -1,0 +1,10 @@
+# local_pyqt/requirements.txt
+# Python 3.11.9
+
+# GUI
+PyQt6>=6.6.0
+
+# Local model inference
+torch>=2.1.0          # install the CUDA build: pip install torch --index-url https://download.pytorch.org/whl/cu121
+transformers>=4.40.0
+accelerate>=0.27.0    # device_map="auto" support

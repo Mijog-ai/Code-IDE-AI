@@ -9,9 +9,8 @@
 from __future__ import annotations
 
 import os
-import re
 
-from PyQt6.QtCore import Qt, QProcess, QThread, QUrl, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QUrl, pyqtSignal
 from PyQt6.QtGui import (
     QColor,
     QFont,
@@ -319,9 +318,10 @@ class CodeRunnerWorker(QThread):
     finished = pyqtSignal(object)     # RunResult dataclass
     error    = pyqtSignal(str)
 
-    def __init__(self, code: str, parent=None) -> None:
+    def __init__(self, code: str, language: str = "python", parent=None) -> None:
         super().__init__(parent)
-        self.code = code
+        self.code     = code
+        self.language = language
         self._install_count  = 0
         self._install_total  = 0
 
@@ -333,28 +333,32 @@ class CodeRunnerWorker(QThread):
                 run_python_code,
             )
 
-            # Pre-scan so we know how many packages to install for progress calc
-            imports = extract_imports(self.code)
-            missing = [
-                resolve_pip_name(m) for m in imports
-                if m not in STDLIB_MODULES and not is_package_installed(m)
-            ]
-            self._install_total = len(missing)
-            self._install_count = 0
+            if self.language == "python":
+                # Pre-scan so we know how many packages to install for progress calc
+                imports = extract_imports(self.code)
+                missing = [
+                    resolve_pip_name(m) for m in imports
+                    if m not in STDLIB_MODULES and not is_package_installed(m)
+                ]
+                self._install_total = len(missing)
+                self._install_count = 0
 
-            self.progress.emit(10, "Checking dependencies…")
-            if missing:
-                self.progress.emit(15, f"Found {len(missing)} missing package(s): {', '.join(missing)}")
-                self.log.emit(f"[!] Missing packages: {', '.join(missing)}")
+                self.progress.emit(10, "Checking dependencies…")
+                if missing:
+                    self.progress.emit(15, f"Found {len(missing)} missing package(s): {', '.join(missing)}")
+                    self.log.emit(f"[!] Missing packages: {', '.join(missing)}")
+                else:
+                    self.log.emit("✓ All dependencies already satisfied.")
             else:
-                self.log.emit("✓ All dependencies already satisfied.")
+                # Non-Python: skip dependency check
+                self._install_total = 0
+                self.progress.emit(10, f"Preparing {self.language.upper()} code…")
+                self.log.emit(f"Running {self.language.upper()} code…")
 
             # ── Hand off the full pipeline to run_python_code ────
-            # It handles: install → exec, calling _progress_cb for every step.
             def _progress_cb(msg: str) -> None:
                 msg_l = msg.lower()
                 if "installing" in msg_l and "[pkg]" in msg_l:
-                    # Each install step: spread 15 % → 65 %
                     self._install_count += 1
                     n = max(self._install_total, 1)
                     pct = 15 + int(self._install_count / n * 50)
@@ -367,7 +371,10 @@ class CodeRunnerWorker(QThread):
                     self.progress.emit(40, msg)
                 self.log.emit(msg)
 
-            result = run_python_code(self.code, timeout=60, progress_cb=_progress_cb)
+            result = run_python_code(
+                self.code, timeout=60,
+                progress_cb=_progress_cb, language=self.language,
+            )
 
             done_msg = "✓ Execution complete." if result.success else "✗ Execution failed."
             self.progress.emit(100, done_msg)
@@ -380,188 +387,6 @@ class CodeRunnerWorker(QThread):
         """Return current progress bar value safely from this thread."""
         n = max(self._install_total, 1)
         return 15 + int(self._install_count / n * 50)
-
-
-# ─────────────────────────────────────────────────────────────────
-# Embedded PowerShell terminal widget
-# ─────────────────────────────────────────────────────────────────
-
-class EmbeddedTerminal(QWidget):
-    """
-    A lightweight PowerShell terminal embedded directly in the IDE.
-
-    ┌──────────────────────────────────────────────┐
-    │  Dark output display (scrollable)            │
-    ├──────────────────────────────────────────────┤
-    │  [input line ________________] [↵] [Clear]   │
-    └──────────────────────────────────────────────┘
-
-    • Spawns `powershell.exe -NoLogo -NoExit` via QProcess.
-    • stdout/stderr are read asynchronously and shown in the display.
-    • ANSI escape codes are stripped so output is always readable.
-    • Type any command (or input for a running program) in the input
-      line and press Enter / click ↵ to send it to the shell's stdin.
-    • Call shutdown() before the parent window closes.
-    """
-
-    # Matches all ANSI/VT100 escape sequences (colours, cursor moves, etc.)
-    _ANSI_RE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
-
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self._process = QProcess(self)
-        self._setup_ui()
-        self._start_shell()
-
-    # ── UI construction ──────────────────────────────────────────
-
-    def _setup_ui(self) -> None:
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(4)
-
-        # Output display — dark theme to visually distinguish from IDE panels
-        self.display = QPlainTextEdit()
-        self.display.setReadOnly(True)
-        mono = QFont("Consolas", 11)
-        mono.setStyleHint(QFont.StyleHint.Monospace)
-        self.display.setFont(mono)
-        self.display.setStyleSheet(
-            "QPlainTextEdit {"
-            "  background-color: #1e1e2e;"
-            "  color: #cdd6f4;"
-            "  border: 1px solid #313244;"
-            "  border-radius: 8px;"
-            "  padding: 8px;"
-            "  selection-background-color: #45475a;"
-            "}"
-        )
-        self.display.setMaximumBlockCount(4000)   # rolling ~4 k line buffer
-        lay.addWidget(self.display, 1)
-
-        # Input row
-        row = QHBoxLayout()
-        row.setSpacing(6)
-
-        self.input_line = QLineEdit()
-        self.input_line.setPlaceholderText(
-            "Type a command or program input, then press Enter to send…"
-        )
-        self.input_line.setFont(mono)
-        self.input_line.setStyleSheet(
-            "QLineEdit {"
-            "  background-color: #181825;"
-            "  color: #cdd6f4;"
-            "  border: 1px solid #45475a;"
-            "  border-radius: 6px;"
-            "  padding: 5px 10px;"
-            "}"
-            "QLineEdit:focus { border-color: #89b4fa; }"
-        )
-        self.input_line.returnPressed.connect(self._send_input)
-        row.addWidget(self.input_line, 1)
-
-        send_btn = QPushButton("↵")
-        send_btn.setFixedWidth(36)
-        send_btn.setToolTip("Send input (Enter)")
-        send_btn.clicked.connect(self._send_input)
-        send_btn.setStyleSheet(
-            "QPushButton {"
-            "  background-color: #313244; color: #cdd6f4;"
-            "  border: 1px solid #45475a; border-radius: 6px;"
-            "  font-size: 15px; padding: 4px;"
-            "}"
-            "QPushButton:hover { background-color: #45475a; }"
-        )
-        row.addWidget(send_btn)
-
-        clear_btn = QPushButton("Clear")
-        clear_btn.setFixedWidth(56)
-        clear_btn.setToolTip("Clear terminal output")
-        clear_btn.clicked.connect(self.display.clear)
-        clear_btn.setStyleSheet(
-            "QPushButton {"
-            "  background-color: #313244; color: #a6adc8;"
-            "  border: 1px solid #45475a; border-radius: 6px;"
-            "  font-size: 12px; padding: 4px;"
-            "}"
-            "QPushButton:hover { background-color: #45475a; }"
-        )
-        row.addWidget(clear_btn)
-
-        lay.addLayout(row)
-
-    # ── Shell process ────────────────────────────────────────────
-
-    def _start_shell(self) -> None:
-        self._process.readyReadStandardOutput.connect(self._on_stdout)
-        self._process.readyReadStandardError.connect(self._on_stderr)
-        self._process.finished.connect(self._on_finished)
-        self._process.setProcessChannelMode(
-            QProcess.ProcessChannelMode.SeparateChannels
-        )
-
-        # Initialisation commands sent to the shell on startup:
-        #   • Force UTF-8 for both input and output so non-ASCII prints fine.
-        #   • Disable ANSI colour rendering in PowerShell 7+ (PSStyle).
-        #     PS 5.x ignores the $PSStyle check gracefully.
-        init = (
-            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
-            "[Console]::InputEncoding  = [System.Text.Encoding]::UTF8; "
-            "if ($PSVersionTable.PSVersion.Major -ge 7) "
-            "{ $PSStyle.OutputRendering = 'PlainText' }; "
-            "Write-Host 'PowerShell terminal ready.'"
-        )
-        self._process.start(
-            "powershell.exe",
-            ["-NoLogo", "-NoExit", "-ExecutionPolicy", "Bypass",
-             "-Command", init],
-        )
-        if not self._process.waitForStarted(4000):
-            self._append("ERROR: PowerShell could not be started.\n", error=True)
-
-    def _on_stdout(self) -> None:
-        raw  = bytes(self._process.readAllStandardOutput())
-        text = raw.decode("utf-8", errors="replace")
-        text = self._ANSI_RE.sub("", text)
-        self._append(text)
-
-    def _on_stderr(self) -> None:
-        raw  = bytes(self._process.readAllStandardError())
-        text = raw.decode("utf-8", errors="replace")
-        text = self._ANSI_RE.sub("", text)
-        self._append(text, error=True)
-
-    def _on_finished(self, exit_code: int, _status) -> None:
-        self._append(f"\n[Shell exited — code {exit_code}]\n")
-
-    def _append(self, text: str, *, error: bool = False) -> None:
-        cursor = self.display.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        fmt = QTextCharFormat()
-        if error:
-            fmt.setForeground(QColor("#f38ba8"))   # soft red for stderr
-        cursor.insertText(text, fmt)
-        self.display.setTextCursor(cursor)
-        self.display.ensureCursorVisible()
-
-    def _send_input(self) -> None:
-        text = self.input_line.text()
-        self.input_line.clear()
-        if not text:
-            return
-        # Echo what was sent so it's visible in the output scroll
-        self._append(f"> {text}\n")
-        self._process.write((text + "\n").encode("utf-8"))
-
-    # ── Lifecycle ────────────────────────────────────────────────
-
-    def shutdown(self) -> None:
-        """Gracefully terminate the shell. Call before the parent window closes."""
-        if self._process.state() != QProcess.ProcessState.NotRunning:
-            self._process.write(b"exit\n")
-            if not self._process.waitForFinished(2000):
-                self._process.kill()
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -581,17 +406,19 @@ class MainWindow(QMainWindow):
         self._is_running     = False
         self._model_loaded   = False
         self._streamed_buf   = ""
-        self._terminal: EmbeddedTerminal | None = None
 
         # API mode state  (set BEFORE _build_ui so widgets can read them)
-        self._mode         = "local"   # "local" | "api"
+        self._mode         = ""        # "" | "local" | "api"  — none selected at start
+        self._model_loading = False    # True while ModelLoaderWorker is running
         self._api_provider = "Groq"
         self._api_key      = ""
         self._api_model    = ""
 
+        # Language selector state
+        self._language     = "python"  # "python" | "php"
+
         self._build_ui()
         self.setStyleSheet(APP_STYLE)
-        self._start_model_load()
 
     # ─────────────────────────────────────────────────────────────
     # UI construction
@@ -625,7 +452,7 @@ class MainWindow(QMainWindow):
         root_lay.addWidget(self._sep())
         root_lay.addWidget(self._build_progress_section())
 
-        self.statusBar().showMessage("Initialising model…")
+        self.statusBar().showMessage("Select a mode to begin.")
 
     def _make_header(self) -> QWidget:
         w   = QWidget()
@@ -641,7 +468,7 @@ class MainWindow(QMainWindow):
 
         # Subtitle changes when mode switches
         self.header_sub_lbl = QLabel(
-            "Local Model · Qwen2.5-Coder-7B-Instruct · 4-bit NF4 · CUDA"
+            "Select a mode to begin"
         )
         self.header_sub_lbl.setStyleSheet(
             f"font-size: 11px; color: {TEXT_MUTED}; margin-left: 8px;"
@@ -664,9 +491,9 @@ class MainWindow(QMainWindow):
         # Apply initial button styles
         self._refresh_mode_buttons()
 
-        self.model_status_lbl = QLabel("● Loading model…")
+        self.model_status_lbl = QLabel("● No mode selected")
         self.model_status_lbl.setStyleSheet(
-            f"font-size: 12px; color: {ACCENT}; margin-left: 12px;"
+            f"font-size: 12px; color: {TEXT_MUTED}; margin-left: 12px;"
         )
         lay.addWidget(self.model_status_lbl)
 
@@ -820,13 +647,38 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self._section_label("CODE EDITOR"))
         toolbar.addStretch()
 
-        lang_badge = QLabel("Python 3")
-        lang_badge.setStyleSheet(
-            "background-color: #fef3c7; color: #d97706;"
-            "border: 1px solid #fde68a; border-radius: 99px;"
-            "padding: 2px 10px; font-size: 11px; font-weight: 600;"
+        # Language selector — replaces the old static "Python 3" badge
+        self.lang_combo = QComboBox()
+        self.lang_combo.addItems(["Python", "PHP"])
+        self.lang_combo.setFixedHeight(26)
+        self.lang_combo.setFixedWidth(100)
+        self.lang_combo.setStyleSheet(
+            f"QComboBox {{"
+            f"  background-color: #fef3c7; color: {ACCENT};"
+            f"  border: 1px solid #fde68a; border-radius: 6px;"
+            "  padding: 2px 4px 2px 10px; font-size: 11px; font-weight: 600;"
+            "}"
+            f"QComboBox:hover {{ background-color: #fde68a; }}"
+            "QComboBox::drop-down {"
+            "  subcontrol-origin: padding; subcontrol-position: top right;"
+            "  width: 20px; border: none;"
+            "  border-top-right-radius: 6px; border-bottom-right-radius: 6px;"
+            "}"
+            f"QComboBox::down-arrow {{"
+            f"  border-left:  4px solid transparent;"
+            f"  border-right: 4px solid transparent;"
+            f"  border-top:   5px solid {ACCENT};"
+            f"  width: 0; height: 0;"
+            f"}}"
+            f"QComboBox QAbstractItemView {{"
+            f"  background-color: {BG_PANEL}; color: {TEXT_PRI};"
+            f"  border: 1px solid {BORDER}; border-radius: 4px;"
+            "  selection-background-color: #fde68a;"
+            f"  selection-color: {TEXT_PRI}; padding: 2px;"
+            f"}}"
         )
-        toolbar.addWidget(lang_badge)
+        self.lang_combo.currentTextChanged.connect(self._on_language_changed)
+        toolbar.addWidget(self.lang_combo)
 
         copy_btn = QPushButton("⎘ Copy")
         copy_btn.clicked.connect(self._copy_code)
@@ -895,28 +747,8 @@ class MainWindow(QMainWindow):
 
         vsplit.addWidget(bot_pane)
 
-        # ─── Bottom pane: embedded PowerShell terminal ────────────
-        term_pane = QWidget()
-        term_lay  = QVBoxLayout(term_pane)
-        term_lay.setContentsMargins(0, 4, 0, 0)
-        term_lay.setSpacing(4)
-
-        term_lay.addWidget(self._sep())
-
-        term_hdr = QHBoxLayout()
-        term_hdr.addWidget(self._section_label("TERMINAL  (PowerShell)"))
-        term_hdr.addStretch()
-        term_hdr_w = QWidget()
-        term_hdr_w.setLayout(term_hdr)
-        term_lay.addWidget(term_hdr_w)
-
-        self._terminal = EmbeddedTerminal()
-        term_lay.addWidget(self._terminal, 1)
-
-        vsplit.addWidget(term_pane)
-
-        # Default split: ~50 % editor, ~28 % output, ~22 % terminal
-        vsplit.setSizes([430, 230, 190])
+        # Default split: ~65 % editor, ~35 % output
+        vsplit.setSizes([480, 260])
 
         lay.addWidget(vsplit, 1)
 
@@ -999,9 +831,17 @@ class MainWindow(QMainWindow):
         self.output_display.ensureCursorVisible()
 
     @staticmethod
-    def _extract_code_partial(text: str) -> str:
-        """Extract code from partial (still-streaming) response."""
-        if "```python" in text:
+    def _extract_code_partial(text: str, language: str = "python") -> str:
+        """
+        Extract code from a partial (still-streaming) response.
+        Tries the language-specific fence first, then falls back to plain ```.
+        """
+        fence = f"```{language}"
+        if fence in text:
+            start = text.find(fence) + len(fence)
+            end   = text.find("```", start)
+            return text[start:end].strip() if end != -1 else text[start:].strip()
+        if "```python" in text:   # common fallback regardless of language
             start = text.find("```python") + len("```python")
             end   = text.find("```", start)
             return text[start:end].strip() if end != -1 else text[start:].strip()
@@ -1036,9 +876,12 @@ class MainWindow(QMainWindow):
         if self._mode == "local":
             self.btn_mode_local.setStyleSheet(self._BTN_ACTIVE_SS)
             self.btn_mode_api.setStyleSheet(self._BTN_INACTIVE_SS)
-        else:
+        elif self._mode == "api":
             self.btn_mode_local.setStyleSheet(self._BTN_INACTIVE_SS)
             self.btn_mode_api.setStyleSheet(self._BTN_ACTIVE_SS)
+        else:  # no mode selected yet
+            self.btn_mode_local.setStyleSheet(self._BTN_INACTIVE_SS)
+            self.btn_mode_api.setStyleSheet(self._BTN_INACTIVE_SS)
 
     def _switch_mode(self, mode: str) -> None:
         if mode == self._mode:
@@ -1051,17 +894,23 @@ class MainWindow(QMainWindow):
                 "Local Model · Qwen2.5-Coder-7B-Instruct · 4-bit NF4 · CUDA"
             )
             self._api_bar.setVisible(False)
-            # Restore model-load status label
             if self._model_loaded:
                 self.model_status_lbl.setText("● Model ready")
                 self.model_status_lbl.setStyleSheet(
                     f"font-size: 12px; color: {GREEN}; margin-left: 12px;"
                 )
-            else:
+            elif self._model_loading:
                 self.model_status_lbl.setText("● Loading model…")
                 self.model_status_lbl.setStyleSheet(
                     f"font-size: 12px; color: {ACCENT}; margin-left: 12px;"
                 )
+            else:
+                # First time selecting local mode — start loading now
+                self.model_status_lbl.setText("● Loading model…")
+                self.model_status_lbl.setStyleSheet(
+                    f"font-size: 12px; color: {ACCENT}; margin-left: 12px;"
+                )
+                self._start_model_load()
         else:
             self.header_sub_lbl.setText(
                 f"API Mode · {self._api_provider}"
@@ -1078,8 +927,10 @@ class MainWindow(QMainWindow):
         """Enable the Generate button based on current-mode readiness."""
         if self._mode == "local":
             self.generate_btn.setEnabled(self._model_loaded)
-        else:
+        elif self._mode == "api":
             self.generate_btn.setEnabled(bool(self._api_key.strip()))
+        else:
+            self.generate_btn.setEnabled(False)
 
     # ── API bar helpers ────────────────────────────────────────────
 
@@ -1150,10 +1001,35 @@ class MainWindow(QMainWindow):
         )
 
     # ─────────────────────────────────────────────────────────────
+    # Language selector
+    # ─────────────────────────────────────────────────────────────
+
+    def _on_language_changed(self, lang_display: str) -> None:
+        """Switch the active language and update the syntax highlighter."""
+        self._language = lang_display.lower()   # "python" | "php"
+
+        # Detach the old highlighter and attach the new one
+        from gui.highlighter import make_highlighter
+        if hasattr(self, "_highlighter") and self._highlighter:
+            self._highlighter.setDocument(None)
+        self._highlighter = make_highlighter(
+            self._language, self.code_editor.document()
+        )
+
+        # Update placeholder text to match language
+        ext = {"python": ".py", "php": ".php"}.get(self._language, "")
+        self.code_editor.setPlaceholderText(
+            f"# Generated {lang_display} code will appear here ({ext})…\n"
+            "# You can edit it before running."
+        )
+        self.statusBar().showMessage(f"Language: {lang_display}")
+
+    # ─────────────────────────────────────────────────────────────
     # Model loading
     # ─────────────────────────────────────────────────────────────
 
     def _start_model_load(self) -> None:
+        self._model_loading = True
         self._loader = ModelLoaderWorker()
         self._loader.progress.connect(self._on_model_progress)
         self._loader.finished.connect(self._on_model_loaded)
@@ -1183,6 +1059,7 @@ class MainWindow(QMainWindow):
 
     def _on_model_loaded(self) -> None:
         self._model_loaded = True
+        self._model_loading = False
         # Only update the UI if we are still in local mode
         if self._mode == "local":
             self.generate_btn.setEnabled(True)
@@ -1196,6 +1073,7 @@ class MainWindow(QMainWindow):
             self._set_progress(100, "Model loaded and ready.")
 
     def _on_model_error(self, err: str) -> None:
+        self._model_loading = False
         self.model_status_lbl.setText("● Load failed")
         self.model_status_lbl.setStyleSheet(f"font-size: 12px; color: {RED};")
         self.statusBar().showMessage(f"Model error: {err}")
@@ -1222,9 +1100,11 @@ class MainWindow(QMainWindow):
         self._chat_history.append({"role": "user", "content": prompt})
         self._append_history("You", prompt, is_user=True)
 
-        # Build message list: system prompt + full history
-        from prompts import SYSTEM_PROMPT
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + self._chat_history
+        # Build message list: language-specific system prompt + full history
+        from prompts import get_system_prompt
+        messages = [
+            {"role": "system", "content": get_system_prompt(self._language)}
+        ] + self._chat_history
 
         self._set_progress(0, "Starting generation…")
 
@@ -1250,7 +1130,7 @@ class MainWindow(QMainWindow):
     def _on_token(self, chunk: str) -> None:
         """Live-update the code editor as tokens stream in."""
         self._streamed_buf += chunk
-        code = self._extract_code_partial(self._streamed_buf)
+        code = self._extract_code_partial(self._streamed_buf, self._language)
         if code:
             self.code_editor.setPlainText(code)
             cursor = self.code_editor.textCursor()
@@ -1260,7 +1140,7 @@ class MainWindow(QMainWindow):
     def _on_generation_done(self, response: str) -> None:
         from prompts import extract_code, extract_explanation
 
-        code        = extract_code(response)
+        code        = extract_code(response, self._language)
         explanation = extract_explanation(response)
 
         if code:
@@ -1299,7 +1179,7 @@ class MainWindow(QMainWindow):
         self.output_display.clear()
         self._set_progress(0, "Starting execution…")
 
-        self._runner = CodeRunnerWorker(code)
+        self._runner = CodeRunnerWorker(code, language=self._language)
         self._runner.progress.connect(self._set_progress)
         self._runner.log.connect(lambda msg: self._append_output(msg))
         self._runner.finished.connect(self._on_run_done)
@@ -1331,7 +1211,7 @@ class MainWindow(QMainWindow):
 
         self._is_running = False
         self.run_btn.setEnabled(True)
-        self.generate_btn.setEnabled(self._model_loaded)
+        self._update_generate_btn_state()
 
         if status == "success":
             self._set_progress(100, "✓ Code ran successfully.")
@@ -1346,7 +1226,7 @@ class MainWindow(QMainWindow):
     def _on_run_error(self, err: str) -> None:
         self._is_running = False
         self.run_btn.setEnabled(True)
-        self.generate_btn.setEnabled(self._model_loaded)
+        self._update_generate_btn_state()
         self._set_progress(0, "Execution error.")
         self._append_output(f"Runner error:\n{err}", is_error=True)
 
@@ -1419,7 +1299,4 @@ class MainWindow(QMainWindow):
     # ─────────────────────────────────────────────────────────────
 
     def closeEvent(self, event) -> None:
-        """Terminate the embedded shell cleanly before the window closes."""
-        if self._terminal is not None:
-            self._terminal.shutdown()
         super().closeEvent(event)

@@ -1,4 +1,6 @@
 # code_runner.py
+import importlib
+import importlib.util
 import subprocess
 import sys
 import tempfile
@@ -74,8 +76,11 @@ def extract_imports(code: str) -> list[str]:
     modules = []
 
     # Match: import X, import X as Y, import X, Y
-    for match in re.finditer(r"^import\s+([\w\s,]+)", code, re.MULTILINE):
-        for part in match.group(1).split(","):
+    # NOTE: [^\n]+ instead of [\w\s,]+ — avoids crossing newlines and swallowing
+    # subsequent import lines into a single match group.
+    for match in re.finditer(r"^import\s+([^\n]+)", code, re.MULTILINE):
+        raw = match.group(1).split("#")[0]   # strip inline comments
+        for part in raw.split(","):
             name = part.strip().split(" as ")[0].strip().split(".")[0]
             if name:
                 modules.append(name)
@@ -106,12 +111,12 @@ def resolve_pip_name(import_name: str) -> str:
 
 
 def is_package_installed(module_name: str) -> bool:
-    """Check if a module can be imported (i.e. is already installed)."""
-    result = subprocess.run(
-        [sys.executable, "-c", f"import {module_name}"],
-        capture_output=True,
-    )
-    return result.returncode == 0
+    """Check if a module is importable — uses importlib (no subprocess overhead)."""
+    try:
+        spec = importlib.util.find_spec(module_name)
+        return spec is not None
+    except (ModuleNotFoundError, ValueError):
+        return False
 
 
 def install_package(pip_name: str) -> tuple[bool, str]:
@@ -126,6 +131,7 @@ def install_package(pip_name: str) -> tuple[bool, str]:
         capture_output=True,
         text=True,
     )
+    importlib.invalidate_caches()   # make the new package findable immediately
     output = result.stdout + result.stderr
     return result.returncode == 0, output
 

@@ -77,6 +77,22 @@ STDLIB_MODULES: frozenset[str] = frozenset({
 })
 
 
+# ── Supported languages ───────────────────────────────────────────
+# Maps language key → (command factory, file extension).
+# cmd is a zero-arg callable so sys.executable is resolved at call time.
+
+LANGUAGE_CONFIG: dict[str, dict] = {
+    "python": {
+        "cmd": lambda: [sys.executable],
+        "ext": ".py",
+    },
+    "php": {
+        "cmd": lambda: ["php"],
+        "ext": ".php",
+    },
+}
+
+
 # ── Matplotlib plot-capture ───────────────────────────────────────
 # Unique marker printed to stdout for each saved figure path.
 _PLOT_MARKER = "__PLOT__:"
@@ -264,24 +280,118 @@ def auto_install_missing(
     return installed, failed, "\n".join(log_lines)
 
 
+# ── Generic (non-Python) code runner ─────────────────────────────
+
+def _run_generic(
+    code: str,
+    language: str,
+    timeout: int = 60,
+    progress_cb=None,
+) -> RunResult:
+    """
+    Execute *code* using the runtime registered in LANGUAGE_CONFIG[language].
+    No auto-install is attempted — the runtime must already be on PATH.
+    """
+    def _cb(msg: str) -> None:
+        if progress_cb:
+            progress_cb(msg)
+
+    cfg = LANGUAGE_CONFIG.get(language)
+    if cfg is None:
+        return RunResult(
+            success=False,
+            stdout="",
+            stderr=f"Unsupported language: {language!r}. "
+                   f"Supported: {list(LANGUAGE_CONFIG)}",
+            exit_code=-1,
+        )
+
+    cmd = cfg["cmd"]()
+    ext = cfg["ext"]
+
+    _cb(f"Executing {language} code...")
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=ext, delete=False, encoding="utf-8"
+    )
+    try:
+        tmp.write(code)
+        tmp.flush()
+        tmp.close()
+
+        result = subprocess.run(
+            cmd + [tmp.name],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        _cb("✓ Execution complete." if result.returncode == 0 else "✗ Execution failed.")
+        return RunResult(
+            success=result.returncode == 0,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            exit_code=result.returncode,
+        )
+
+    except subprocess.TimeoutExpired:
+        return RunResult(
+            success=False,
+            stdout="",
+            stderr=f"Timed out after {timeout}s — check for infinite loops.",
+            exit_code=-1,
+            timed_out=True,
+        )
+    except FileNotFoundError:
+        return RunResult(
+            success=False,
+            stdout="",
+            stderr=(
+                f"'{cmd[0]}' was not found on PATH.\n"
+                f"Install {language.upper()} and make sure it is in your system PATH."
+            ),
+            exit_code=-1,
+        )
+    except Exception as exc:
+        return RunResult(
+            success=False,
+            stdout="",
+            stderr=f"Failed to launch {language} process: {exc}",
+            exit_code=-1,
+        )
+    finally:
+        if os.path.exists(tmp.name):
+            os.unlink(tmp.name)
+
+
 # ── Code execution ────────────────────────────────────────────────
 
 def run_python_code(
     code: str,
     timeout: int = 60,
     progress_cb=None,
+    language: str = "python",
 ) -> RunResult:
     """
-    Full pipeline: detect missing packages → install → execute.
+    Full pipeline for the selected language.
+
+    For Python:  detect missing packages → auto-install → execute
+                 (matplotlib figures are captured and returned as PNGs)
+    For others:  write to a temp file and execute with the appropriate
+                 runtime (e.g. `php`, `node`) — no auto-install step.
 
     Args:
-        code:        Python source to run
-        timeout:     max seconds before killing the process
-        progress_cb: optional callable(message) for step updates
+        code:        Source code to run
+        timeout:     Max seconds before killing the process
+        progress_cb: Optional callable(message) for step updates
+        language:    One of the keys in LANGUAGE_CONFIG ("python", "php", …)
 
     Returns:
-        RunResult with stdout, stderr, exit code, and installed package list
+        RunResult with stdout, stderr, exit code, and optional plot paths
     """
+    # ── Non-Python path (simple runner) ──────────────────────────
+    if language != "python":
+        return _run_generic(code, language=language, timeout=timeout,
+                            progress_cb=progress_cb)
+
     def _cb(msg: str) -> None:
         if progress_cb:
             progress_cb(msg)

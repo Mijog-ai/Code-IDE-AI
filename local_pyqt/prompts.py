@@ -1,9 +1,8 @@
 # prompts.py
 
 # ─────────────────────────────────────────────────────────────────
-# SYSTEM PROMPT
-# This is sent as the first message in every conversation.
-# It sets the AI's identity, rules, and output format.
+# SYSTEM PROMPTS  (one per supported language)
+# Each prompt is sent as the first message in every conversation.
 # ─────────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """You are an expert Python software engineer and coding assistant \
@@ -45,6 +44,63 @@ Help users write clean, correct, production-ready Python code.
 """
 
 
+PHP_SYSTEM_PROMPT = """You are an expert PHP developer and coding assistant \
+built into an AI-powered coding IDE.
+
+## YOUR JOB
+Help users write clean, correct, production-ready PHP code.
+
+## OUTPUT RULES — FOLLOW EXACTLY
+1. Always wrap ALL code in a single ```php code block.
+2. Never split code across multiple code blocks.
+3. Write complete, runnable scripts — not fragments or pseudocode.
+4. Start every script with the <?php opening tag.
+5. After the code block, write a short explanation (3-6 bullet points).
+6. Keep explanations concise — the code speaks for itself.
+7. If the user asks a question (not for code), answer clearly in plain text.
+
+## CODE QUALITY RULES
+- Add brief comments on non-obvious logic
+- Use descriptive variable names
+- Handle errors with try/catch blocks where relevant
+- Use modern PHP 8+ syntax (named arguments, match, fibers, enums) where appropriate
+- Use strict typing: declare(strict_types=1); at the top
+
+## WHAT YOU NEVER DO
+- Never generate harmful, malicious, or system-damaging code
+- Never use placeholder logic like `// TODO implement this`
+- Never truncate code with `// ... rest of code`
+- Never apologize or add filler phrases like "Certainly!" or "Of course!"
+
+## RESPONSE FORMAT EXAMPLE
+```php
+<?php
+declare(strict_types=1);
+// Your complete code here
+```
+
+**What this does:**
+- Point 1
+- Point 2
+- Point 3
+"""
+
+
+# ─────────────────────────────────────────────────────────────────
+# Language-aware system prompt selector
+# ─────────────────────────────────────────────────────────────────
+
+_PROMPTS: dict[str, str] = {
+    "python": SYSTEM_PROMPT,
+    "php":    PHP_SYSTEM_PROMPT,
+}
+
+
+def get_system_prompt(language: str = "python") -> str:
+    """Return the correct system prompt for the given programming language."""
+    return _PROMPTS.get(language.lower(), SYSTEM_PROMPT)
+
+
 # ─────────────────────────────────────────────────────────────────
 # HELPER: Build the full message list sent to the API
 # ─────────────────────────────────────────────────────────────────
@@ -71,34 +127,46 @@ def build_messages(chat_history: list[dict]) -> list[dict]:
 # HELPER: Extract code block from AI response
 # ─────────────────────────────────────────────────────────────────
 
-def extract_code(response: str) -> str:
+def extract_code(response: str, language: str = "python") -> str:
     """
-    Pull the Python code block out of the AI's response.
+    Pull the code block out of the AI's response.
 
-    The AI wraps code in ```python ... ``` fences.
+    The AI wraps code in ```<language> ... ``` fences (e.g. ```python, ```php).
     We extract just the code, stripping the markdown fences.
 
     Args:
         response: Full text response from the AI
+        language: Expected fence language tag ("python", "php", …)
 
     Returns:
-        Raw Python code string, or empty string if no code found
+        Raw code string, or empty string if no code block found
     """
-    # Look for ```python ... ``` block
+    # 1. Try language-specific fence first (e.g. ```php)
+    fence = f"```{language.lower()}"
+    if fence in response:
+        start = response.find(fence) + len(fence)
+        end   = response.find("```", start)
+        if end != -1:
+            return response[start:end].strip()
+
+    # 2. Fallback: try ```python (common even when asking for another language)
     if "```python" in response:
         start = response.find("```python") + len("```python")
-        end = response.find("```", start)
+        end   = response.find("```", start)
         if end != -1:
             return response[start:end].strip()
 
-    # Fallback: look for plain ``` ... ``` block
+    # 3. Plain ``` fence (no language tag)
     if "```" in response:
         start = response.find("```") + 3
+        # Skip any inline language tag on the opening line
+        newline = response.find("\n", start)
+        if newline != -1 and response[start:newline].strip().isalpha():
+            start = newline + 1
         end = response.find("```", start)
         if end != -1:
             return response[start:end].strip()
 
-    # No code block found — return empty
     return ""
 
 

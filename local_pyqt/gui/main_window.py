@@ -56,32 +56,41 @@ RED         = "#dc2626"
 # Internal key must match LANGUAGE_CONFIG in code_runner.py and
 # the _PROMPTS dict in prompts.py.
 _LANG_DISPLAY_MAP: dict[str, str] = {
-    "python":           "python",
-    "php":              "php",
-    "c# / asp.net":     "csharp",
-    "kotlin":           "kotlin",
-    "flutter / dart":   "dart",
-    "visual foxpro":    "foxpro",
+    "python":               "python",
+    "javascript / node.js": "javascript",
+    "typescript":           "typescript",
+    "go":                   "go",
+    "php":                  "php",
+    "c# / asp.net":         "csharp",
+    "kotlin":               "kotlin",
+    "flutter / dart":       "dart",
+    "visual foxpro":        "foxpro",
 }
 
 # Internal key → file extension (for editor placeholder)
 _LANG_EXT: dict[str, str] = {
-    "python":  ".py",
-    "php":     ".php",
-    "csharp":  ".csx",
-    "kotlin":  ".kts",
-    "dart":    ".dart",
-    "foxpro":  ".prg",
+    "python":     ".py",
+    "javascript": ".js",
+    "typescript": ".ts",
+    "go":         ".go",
+    "php":        ".php",
+    "csharp":     ".csx",
+    "kotlin":     ".kts",
+    "dart":       ".dart",
+    "foxpro":     ".prg",
 }
 
 # Internal key → comment prefix (for editor placeholder text)
 _LANG_COMMENT: dict[str, str] = {
-    "python":  "#",
-    "php":     "//",
-    "csharp":  "//",
-    "kotlin":  "//",
-    "dart":    "//",
-    "foxpro":  "*",
+    "python":     "#",
+    "javascript": "//",
+    "typescript": "//",
+    "go":         "//",
+    "php":        "//",
+    "csharp":     "//",
+    "kotlin":     "//",
+    "dart":       "//",
+    "foxpro":     "*",
 }
 
 APP_STYLE = f"""
@@ -710,11 +719,18 @@ class MainWindow(QMainWindow):
         # Language selector — replaces the old static "Python 3" badge
         self.lang_combo = QComboBox()
         self.lang_combo.addItems([
-            "Python", "PHP", "C# / ASP.NET", "Kotlin", "Flutter / Dart",
+            "Python",
+            "JavaScript / Node.js",
+            "TypeScript",
+            "Go",
+            "PHP",
+            "C# / ASP.NET",
+            "Kotlin",
+            "Flutter / Dart",
             "Visual FoxPro",
         ])
         self.lang_combo.setFixedHeight(26)
-        self.lang_combo.setFixedWidth(150)
+        self.lang_combo.setFixedWidth(175)
         self.lang_combo.setStyleSheet(
             f"QComboBox {{"
             f"  background-color: #fef3c7; color: {ACCENT};"

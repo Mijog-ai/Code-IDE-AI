@@ -511,6 +511,234 @@ class FoxProHighlighter(QSyntaxHighlighter):
 
 
 # ─────────────────────────────────────────────────────────────────
+# JavaScript syntax highlighter
+# ─────────────────────────────────────────────────────────────────
+
+_JS_RULES: list[tuple[str, QTextCharFormat]] = [
+
+    # Template literals  `...${expr}...`
+    (r'`[^`\\]*(\\.[^`\\]*)*`',             _fmt("#16a34a", italic=True)),
+    # Regular strings
+    (r'"[^"\\]*(\\.[^"\\]*)*"',             _fmt("#16a34a")),
+    (r"'[^'\\]*(\\.[^'\\]*)*'",             _fmt("#16a34a")),
+
+    # Keywords
+    (
+        r"\b(async|await|break|case|catch|class|const|continue|debugger|"
+        r"default|delete|do|else|export|extends|false|finally|for|from|"
+        r"function|if|import|in|instanceof|let|new|null|of|return|"
+        r"static|super|switch|this|throw|true|try|typeof|undefined|var|"
+        r"void|while|with|yield)\b",
+        _fmt("#7c3aed", bold=True),
+    ),
+
+    # Built-in globals / Node.js
+    (
+        r"\b(console|process|require|module|exports|__dirname|__filename|"
+        r"Buffer|setTimeout|setInterval|clearTimeout|clearInterval|"
+        r"Promise|Array|Object|String|Number|Boolean|RegExp|Date|Math|"
+        r"JSON|Map|Set|WeakMap|WeakSet|Symbol|Error|TypeError|RangeError|"
+        r"fetch|URL|URLSearchParams|crypto|fs|path|http|https|os|stream|"
+        r"EventEmitter|ReadableStream|WritableStream)\b",
+        _fmt("#0369a1"),
+    ),
+
+    # Numbers
+    (r"\b0[xX][0-9a-fA-F]+n?\b",           _fmt("#b45309")),
+    (r"\b0[bB][01]+n?\b",                   _fmt("#b45309")),
+    (r"\b\d+\.\d+([eE][+-]?\d+)?\b",       _fmt("#b45309")),
+    (r"\b\d+n?\b",                          _fmt("#b45309")),
+
+    # Arrow / function declarations
+    (r"\bfunction\s+(\w+)",                 _fmt("#0891b2", bold=True)),
+    (r"\bclass\s+(\w+)",                    _fmt("#7c3aed", bold=True)),
+    (r"(\w+)\s*=\s*(?:async\s*)?\(",        _fmt("#0891b2")),  # const fn = (...)
+
+    # JSDoc  /** ... */
+    (r"/\*\*[\s\S]*?\*/",                   _fmt("#16a34a", italic=True)),
+    # Block comments  /* ... */
+    (r"/\*[\s\S]*?\*/",                     _fmt("#a8a29e", italic=True)),
+    # Line comments  //
+    (r"//[^\n]*",                           _fmt("#a8a29e", italic=True)),
+]
+
+_JS_COMPILED_RULES: list[tuple[QRegularExpression, QTextCharFormat]] = [
+    (QRegularExpression(pat), fmt) for pat, fmt in _JS_RULES
+]
+
+
+class JavaScriptHighlighter(QSyntaxHighlighter):
+    """Applies JavaScript / Node.js token colouring to a QTextDocument."""
+
+    def __init__(self, document) -> None:
+        super().__init__(document)
+
+    def highlightBlock(self, text: str) -> None:
+        for pattern, fmt in _JS_COMPILED_RULES:
+            it = pattern.globalMatch(text)
+            while it.hasNext():
+                m = it.next()
+                self.setFormat(m.capturedStart(), m.capturedLength(), fmt)
+
+
+# ─────────────────────────────────────────────────────────────────
+# TypeScript syntax highlighter  (extends JS rules with TS types)
+# ─────────────────────────────────────────────────────────────────
+
+_TS_RULES: list[tuple[str, QTextCharFormat]] = [
+
+    # Template literals
+    (r'`[^`\\]*(\\.[^`\\]*)*`',             _fmt("#16a34a", italic=True)),
+    # Regular strings
+    (r'"[^"\\]*(\\.[^"\\]*)*"',             _fmt("#16a34a")),
+    (r"'[^'\\]*(\\.[^'\\]*)*'",             _fmt("#16a34a")),
+
+    # Decorators  @Injectable()  @Component({...})
+    (r"@[\w.]+",                            _fmt("#d97706", bold=True)),
+
+    # TS-specific keywords (listed first so they override the shared JS set)
+    (
+        r"\b(abstract|as|asserts|declare|enum|implements|interface|"
+        r"infer|keyof|module|namespace|never|override|readonly|satisfies|"
+        r"type|typeof|unique|unknown)\b",
+        _fmt("#0891b2", bold=True),
+    ),
+
+    # Shared JS keywords
+    (
+        r"\b(async|await|break|case|catch|class|const|continue|debugger|"
+        r"default|delete|do|else|export|extends|false|finally|for|from|"
+        r"function|if|import|in|instanceof|let|new|null|of|return|"
+        r"static|super|switch|this|throw|true|try|undefined|var|"
+        r"void|while|with|yield)\b",
+        _fmt("#7c3aed", bold=True),
+    ),
+
+    # Primitive types
+    (
+        r"\b(string|number|boolean|bigint|symbol|object|any|void|never|"
+        r"unknown|null|undefined)\b",
+        _fmt("#0369a1"),
+    ),
+
+    # Common TS / Node utility types
+    (
+        r"\b(Array|Record|Partial|Required|Readonly|Pick|Omit|Exclude|"
+        r"Extract|NonNullable|ReturnType|InstanceType|Parameters|"
+        r"Promise|Map|Set|WeakMap|WeakRef|Error|console|process|Buffer)\b",
+        _fmt("#0369a1"),
+    ),
+
+    # Numbers
+    (r"\b0[xX][0-9a-fA-F]+n?\b",           _fmt("#b45309")),
+    (r"\b\d+\.\d+([eE][+-]?\d+)?\b",       _fmt("#b45309")),
+    (r"\b\d+n?\b",                          _fmt("#b45309")),
+
+    # function / class / interface / type alias declarations
+    (r"\bfunction\s+(\w+)",                 _fmt("#0891b2", bold=True)),
+    (r"\bclass\s+(\w+)",                    _fmt("#7c3aed", bold=True)),
+    (r"\binterface\s+(\w+)",                _fmt("#0891b2", bold=True)),
+    (r"\btype\s+(\w+)\s*=",                 _fmt("#0891b2", bold=True)),
+
+    # JSDoc / TSDoc  /** ... */
+    (r"/\*\*[\s\S]*?\*/",                   _fmt("#16a34a", italic=True)),
+    # Block comments
+    (r"/\*[\s\S]*?\*/",                     _fmt("#a8a29e", italic=True)),
+    # Line comments
+    (r"//[^\n]*",                           _fmt("#a8a29e", italic=True)),
+]
+
+_TS_COMPILED_RULES: list[tuple[QRegularExpression, QTextCharFormat]] = [
+    (QRegularExpression(pat), fmt) for pat, fmt in _TS_RULES
+]
+
+
+class TypeScriptHighlighter(QSyntaxHighlighter):
+    """Applies TypeScript token colouring to a QTextDocument."""
+
+    def __init__(self, document) -> None:
+        super().__init__(document)
+
+    def highlightBlock(self, text: str) -> None:
+        for pattern, fmt in _TS_COMPILED_RULES:
+            it = pattern.globalMatch(text)
+            while it.hasNext():
+                m = it.next()
+                self.setFormat(m.capturedStart(), m.capturedLength(), fmt)
+
+
+# ─────────────────────────────────────────────────────────────────
+# Go syntax highlighter
+# ─────────────────────────────────────────────────────────────────
+
+_GO_RULES: list[tuple[str, QTextCharFormat]] = [
+
+    # Raw string literals  `...`
+    (r'`[^`]*`',                            _fmt("#16a34a", italic=True)),
+    # Regular strings / runes
+    (r'"[^"\\]*(\\.[^"\\]*)*"',             _fmt("#16a34a")),
+    (r"'[^'\\]*(\\.[^'\\]*)*'",             _fmt("#16a34a")),
+
+    # Keywords
+    (
+        r"\b(break|case|chan|const|continue|default|defer|else|fallthrough|"
+        r"for|func|go|goto|if|import|interface|map|package|range|return|"
+        r"select|struct|switch|type|var)\b",
+        _fmt("#7c3aed", bold=True),
+    ),
+
+    # Predeclared identifiers (built-ins + types)
+    (
+        r"\b(append|cap|clear|close|complex|copy|delete|imag|len|make|max|"
+        r"min|new|panic|print|println|real|recover|any|bool|byte|comparable|"
+        r"complex64|complex128|error|float32|float64|int|int8|int16|int32|"
+        r"int64|rune|string|uint|uint8|uint16|uint32|uint64|uintptr|"
+        r"true|false|nil|iota)\b",
+        _fmt("#0369a1"),
+    ),
+
+    # Numbers (int, float, hex, binary, octet, imaginary)
+    (r"\b0[xX][0-9a-fA-F_]+\b",            _fmt("#b45309")),
+    (r"\b0[bB][01_]+\b",                    _fmt("#b45309")),
+    (r"\b0[oO][0-7_]+\b",                   _fmt("#b45309")),
+    (r"\b\d[\d_]*\.\d[\d_]*([eE][+-]?\d+)?(i)?\b", _fmt("#b45309")),
+    (r"\b\d[\d_]*(i)?\b",                   _fmt("#b45309")),
+
+    # func / type / struct declarations
+    (r"\bfunc\s+(\w+)",                     _fmt("#0891b2", bold=True)),
+    (r"\btype\s+(\w+)",                     _fmt("#7c3aed", bold=True)),
+    (r"\bstruct\b",                         _fmt("#7c3aed", bold=True)),
+    (r"\binterface\b",                      _fmt("#7c3aed", bold=True)),
+
+    # Package / import paths  "fmt"  "os"  "encoding/json"
+    (r'"[\w./]+"',                          _fmt("#16a34a")),
+
+    # Block comments  /* ... */
+    (r"/\*[\s\S]*?\*/",                     _fmt("#a8a29e", italic=True)),
+    # Line comments  //
+    (r"//[^\n]*",                           _fmt("#a8a29e", italic=True)),
+]
+
+_GO_COMPILED_RULES: list[tuple[QRegularExpression, QTextCharFormat]] = [
+    (QRegularExpression(pat), fmt) for pat, fmt in _GO_RULES
+]
+
+
+class GoHighlighter(QSyntaxHighlighter):
+    """Applies Go token colouring to a QTextDocument."""
+
+    def __init__(self, document) -> None:
+        super().__init__(document)
+
+    def highlightBlock(self, text: str) -> None:
+        for pattern, fmt in _GO_COMPILED_RULES:
+            it = pattern.globalMatch(text)
+            while it.hasNext():
+                m = it.next()
+                self.setFormat(m.capturedStart(), m.capturedLength(), fmt)
+
+
+# ─────────────────────────────────────────────────────────────────
 # Factory helper
 # ─────────────────────────────────────────────────────────────────
 
@@ -520,6 +748,12 @@ def make_highlighter(language: str, document) -> QSyntaxHighlighter:
     *document*.  Falls back to PythonHighlighter for unknown languages.
     """
     lang = language.lower()
+    if lang == "javascript":
+        return JavaScriptHighlighter(document)
+    if lang == "typescript":
+        return TypeScriptHighlighter(document)
+    if lang == "go":
+        return GoHighlighter(document)
     if lang == "php":
         return PhpHighlighter(document)
     if lang == "csharp":

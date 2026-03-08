@@ -87,6 +87,21 @@ LANGUAGE_CONFIG: dict[str, dict] = {
         "cmd": lambda: [sys.executable],
         "ext": ".py",
     },
+    # JavaScript — requires: Node.js on PATH (https://nodejs.org/)
+    "javascript": {
+        "cmd": lambda: ["node"],
+        "ext": ".js",
+    },
+    # TypeScript — requires: Node.js on PATH; tsx is downloaded on-demand via npx
+    "typescript": {
+        "cmd": lambda: ["npx", "--yes", "tsx"],
+        "ext": ".ts",
+    },
+    # Go — requires: Go toolchain on PATH (https://go.dev/)
+    "go": {
+        "cmd": lambda: ["go", "run"],
+        "ext": ".go",
+    },
     "php": {
         "cmd": lambda: ["php"],
         "ext": ".php",
@@ -119,17 +134,94 @@ LANGUAGE_CONFIG: dict[str, dict] = {
 
 
 # ── Runtime availability & auto-install ──────────────────────────
-# Each entry describes HOW to install the runtime for a language.
-# "steps" is an ordered list of commands; they are run sequentially.
-# "cannot_install" marks runtimes that must be installed manually.
+#
+# Each RUNTIME_INFO entry has:
+#   "name"            — human-readable runtime name
+#   "check"           — executable to look for on PATH
+#   "strategies"      — ordered list of install strategies to try
+#     Each strategy:  {"label": str, "steps": [[cmd, arg, ...], ...]}
+#   "cannot_install"  — True for runtimes that can only be installed manually
+#   "url"             — manual download URL shown on failure
+#   "post_install_note" (optional) — extra guidance shown after success
+#   "manual_note"     — message shown when cannot_install is True
 
 RUNTIME_INFO: dict[str, dict] = {
+    "javascript": {
+        "name":    "Node.js",
+        "check":   "node",
+        "strategies": [
+            {
+                "label": "winget",
+                "steps": [
+                    ["winget", "install", "OpenJS.NodeJS.LTS",
+                     "--accept-source-agreements", "--accept-package-agreements"],
+                ],
+            },
+            {
+                "label": "Chocolatey",
+                "steps": [["choco", "install", "nodejs-lts", "-y"]],
+            },
+        ],
+        "cannot_install": False,
+        "url": "https://nodejs.org/en/download/",
+    },
+    "typescript": {
+        "name":    "Node.js (required for TypeScript / tsx)",
+        "check":   "node",    # tsx runs via npx — only node needs to be installed
+        "strategies": [
+            {
+                "label": "winget",
+                "steps": [
+                    ["winget", "install", "OpenJS.NodeJS.LTS",
+                     "--accept-source-agreements", "--accept-package-agreements"],
+                ],
+            },
+            {
+                "label": "Chocolatey",
+                "steps": [["choco", "install", "nodejs-lts", "-y"]],
+            },
+        ],
+        "cannot_install": False,
+        "url": "https://nodejs.org/en/download/",
+        "post_install_note": (
+            "TypeScript files are executed via 'npx tsx' — tsx is downloaded\n"
+            "automatically by npx on first use. No separate TypeScript install needed."
+        ),
+    },
+    "go": {
+        "name":    "Go",
+        "check":   "go",
+        "strategies": [
+            {
+                "label": "winget",
+                "steps": [
+                    ["winget", "install", "GoLang.Go",
+                     "--accept-source-agreements", "--accept-package-agreements"],
+                ],
+            },
+            {
+                "label": "Chocolatey",
+                "steps": [["choco", "install", "golang", "-y"]],
+            },
+        ],
+        "cannot_install": False,
+        "url": "https://go.dev/dl/",
+    },
     "php": {
         "name":    "PHP 8",
         "check":   "php",
-        "steps": [
-            ["winget", "install", "PHP.PHP.8.3",
-             "--accept-source-agreements", "--accept-package-agreements"],
+        "strategies": [
+            {
+                "label": "winget",
+                "steps": [
+                    ["winget", "install", "PHP.PHP",
+                     "--accept-source-agreements", "--accept-package-agreements"],
+                ],
+            },
+            {
+                "label": "Chocolatey",
+                "steps": [["choco", "install", "php", "-y"]],
+            },
         ],
         "cannot_install": False,
         "url": "https://www.php.net/downloads",
@@ -137,32 +229,64 @@ RUNTIME_INFO: dict[str, dict] = {
     "csharp": {
         "name":    "dotnet-script (C# scripting)",
         "check":   "dotnet-script",
-        "steps": [
-            # Step 1: install .NET SDK (required before dotnet tool install)
-            ["winget", "install", "Microsoft.DotNet.SDK.8",
-             "--accept-source-agreements", "--accept-package-agreements"],
-            # Step 2: install dotnet-script global tool
-            ["dotnet", "tool", "install", "-g", "dotnet-script"],
+        "strategies": [
+            {
+                "label": "winget + dotnet tool",
+                "steps": [
+                    # Step 1 — install .NET SDK via winget
+                    ["winget", "install", "Microsoft.DotNet.SDK.8",
+                     "--accept-source-agreements", "--accept-package-agreements"],
+                    # Step 2 — install dotnet-script as a global .NET tool
+                    ["dotnet", "tool", "install", "-g", "dotnet-script"],
+                ],
+            },
         ],
         "cannot_install": False,
         "url": "https://github.com/dotnet-script/dotnet-script",
+        "post_install_note": (
+            "dotnet-script is installed as a global .NET tool.\n"
+            "If 'dotnet-script' is still not found after install, restart the app —\n"
+            "the .NET tools folder (~/.dotnet/tools) must be on PATH."
+        ),
     },
     "kotlin": {
         "name":    "Kotlin (kotlinc)",
         "check":   "kotlinc",
-        "steps": [
-            ["winget", "install", "JetBrains.Kotlin",
-             "--accept-source-agreements", "--accept-package-agreements"],
+        "strategies": [
+            {
+                "label": "Chocolatey",        # choco has a reliable kotlinc package
+                "steps": [["choco", "install", "kotlinc", "-y"]],
+            },
+            {
+                "label": "winget",
+                "steps": [
+                    ["winget", "install", "JetBrains.Kotlin.Compiler",
+                     "--accept-source-agreements", "--accept-package-agreements"],
+                ],
+            },
         ],
         "cannot_install": False,
         "url": "https://kotlinlang.org/docs/command-line.html",
+        "post_install_note": (
+            "Kotlin requires a JDK 17+ on PATH.\n"
+            "Install it with:  winget install Microsoft.OpenJDK.21"
+        ),
     },
     "dart": {
         "name":    "Dart SDK",
         "check":   "dart",
-        "steps": [
-            ["winget", "install", "Dart.Dart",
-             "--accept-source-agreements", "--accept-package-agreements"],
+        "strategies": [
+            {
+                "label": "winget",
+                "steps": [
+                    ["winget", "install", "Dart.Dart",
+                     "--accept-source-agreements", "--accept-package-agreements"],
+                ],
+            },
+            {
+                "label": "Chocolatey",
+                "steps": [["choco", "install", "dart-sdk", "-y"]],
+            },
         ],
         "cannot_install": False,
         "url": "https://dart.dev/get-dart",
@@ -170,7 +294,7 @@ RUNTIME_INFO: dict[str, dict] = {
     "foxpro": {
         "name":    "Visual FoxPro 9",
         "check":   "vfp9",
-        "steps":   [],
+        "strategies": [],
         "cannot_install": True,
         "url": "https://vfpx.github.io/",
         "manual_note": (
@@ -184,10 +308,67 @@ RUNTIME_INFO: dict[str, dict] = {
 }
 
 
+def _refresh_windows_path() -> bool:
+    """
+    Re-read the user and system PATH from the Windows registry and update
+    os.environ["PATH"] in the running process.
+
+    winget / choco update the registry when they install, but not the
+    environment of already-running processes.  Calling this after a
+    successful install lets the app find newly-added executables without
+    restarting, so `shutil.which()` and subprocess calls work immediately.
+
+    Returns True on success, False if not on Windows or if the registry
+    read fails.
+    """
+    try:
+        import winreg
+        parts: list[str] = []
+        for root, subkey in [
+            (winreg.HKEY_LOCAL_MACHINE,
+             r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+            (winreg.HKEY_CURRENT_USER, r"Environment"),
+        ]:
+            try:
+                with winreg.OpenKey(root, subkey) as k:
+                    val, _ = winreg.QueryValueEx(k, "Path")
+                    if val:
+                        parts.append(val)
+            except (FileNotFoundError, OSError):
+                pass
+        if parts:
+            os.environ["PATH"] = os.pathsep.join(parts)
+        return True
+    except Exception:
+        return False
+
+
+def is_winget_available() -> bool:
+    """Return True if winget (Windows Package Manager) is on PATH."""
+    return shutil.which("winget") is not None
+
+
+def is_choco_available() -> bool:
+    """Return True if Chocolatey (choco) is on PATH."""
+    return shutil.which("choco") is not None
+
+
 def is_runtime_available(language: str) -> bool:
-    """Return True if the runtime for *language* is on PATH (or is Python itself)."""
+    """
+    Return True if the runtime for *language* is on PATH.
+
+    Python is always available (we're running in it).
+    For other languages, the "check" executable from RUNTIME_INFO is used
+    when present; otherwise the first word of LANGUAGE_CONFIG["cmd"]() is used.
+    """
     if language == "python":
         return True
+    # Use the dedicated "check" binary from RUNTIME_INFO if registered
+    info = RUNTIME_INFO.get(language, {})
+    check_exe = info.get("check")
+    if check_exe:
+        return shutil.which(check_exe) is not None
+    # Fall back to the first element of the runner command
     cfg = LANGUAGE_CONFIG.get(language)
     if cfg is None:
         return False
@@ -199,16 +380,16 @@ def install_runtime(
     progress_cb=None,
 ) -> tuple[bool, str]:
     """
-    Run the sequential install steps for *language*'s runtime.
+    Install the runtime for *language* by trying each strategy in order.
 
-    Each step is a command list passed to subprocess.run().
-    Progress messages are emitted via *progress_cb(msg)* if provided.
+    Strategies are tried sequentially:
+      - If the strategy's primary tool (winget / choco) is not on PATH,
+        that strategy is skipped and the next one is tried.
+      - After every successful strategy, the Windows PATH is refreshed
+        from the registry so the new binary is findable immediately.
 
     Returns:
         (success: bool, log: str)
-        success is True when all steps finished without error codes.
-        Even on success the caller should warn the user to restart their
-        terminal so the new PATH entry is visible.
     """
     def _cb(msg: str) -> None:
         if progress_cb:
@@ -221,55 +402,105 @@ def install_runtime(
     if info.get("cannot_install"):
         return False, info.get("manual_note", "This runtime cannot be installed automatically.")
 
-    log_lines: list[str] = []
+    strategies = info.get("strategies", [])
+    if not strategies:
+        return False, f"No install strategies defined for {language!r}."
 
-    for step in info["steps"]:
-        cmd_str = " ".join(step)
-        _cb(f"[INSTALL] Running: {cmd_str}")
-        log_lines.append(f"[INSTALL] Running: {cmd_str}")
+    all_logs: list[str] = []
 
-        try:
-            result = subprocess.run(
-                step,
-                capture_output=True,
-                text=True,
-                timeout=300,          # 5 minutes per step
-            )
-            if result.stdout.strip():
-                log_lines.append(result.stdout.strip())
-            if result.returncode != 0:
-                err = result.stderr.strip() or f"Exit code {result.returncode}"
-                log_lines.append(f"[ERROR] {err}")
-                _cb(f"[ERROR] Step failed: {cmd_str}")
-                return False, "\n".join(log_lines)
+    for strategy in strategies:
+        label = strategy.get("label", "unknown")
+        steps = strategy.get("steps", [])
+        if not steps:
+            continue
+
+        # Skip strategy if its primary tool isn't available
+        first_cmd = steps[0][0] if steps[0] else ""
+        if first_cmd == "winget" and not is_winget_available():
+            msg = f"[SKIP] winget not found — skipping '{label}' strategy."
+            _cb(msg)
+            all_logs.append(msg)
+            continue
+        if first_cmd == "choco" and not is_choco_available():
+            msg = f"[SKIP] Chocolatey not found — skipping '{label}' strategy."
+            _cb(msg)
+            all_logs.append(msg)
+            continue
+
+        _cb(f"\n── Strategy: {label} ────────────────────────")
+        all_logs.append(f"\n── Strategy: {label} ────────────────────────")
+
+        strategy_ok = True
+        for step in steps:
+            cmd_str = " ".join(step)
+            _cb(f"[RUN] {cmd_str}")
+            all_logs.append(f"[RUN] {cmd_str}")
+            try:
+                result = subprocess.run(
+                    step,
+                    capture_output=True,
+                    text=True,
+                    timeout=300,     # 5 minutes per step
+                )
+                out = result.stdout.strip()
+                err = result.stderr.strip()
+                if out:
+                    all_logs.append(out)
+                if result.returncode != 0:
+                    msg = err or f"Exit code {result.returncode}"
+                    all_logs.append(f"[FAIL] {msg}")
+                    _cb(f"[FAIL] Step failed: {cmd_str}")
+                    strategy_ok = False
+                    break
+                else:
+                    _cb(f"[OK] Done: {cmd_str}")
+                    all_logs.append(f"[OK] Done.")
+            except subprocess.TimeoutExpired:
+                all_logs.append(f"[FAIL] Timed out (5 min): {cmd_str}")
+                _cb("[FAIL] Step timed out.")
+                strategy_ok = False
+                break
+            except FileNotFoundError as exc:
+                all_logs.append(f"[FAIL] Command not found: {exc}")
+                _cb(f"[FAIL] {exc}")
+                strategy_ok = False
+                break
+            except Exception as exc:
+                all_logs.append(f"[FAIL] Unexpected error: {exc}")
+                _cb(f"[FAIL] {exc}")
+                strategy_ok = False
+                break
+
+        if strategy_ok:
+            # Refresh the process PATH from registry so new binaries are found now
+            _cb("[INFO] Refreshing PATH from Windows registry…")
+            _refresh_windows_path()
+
+            note = info.get("post_install_note", "")
+            if note:
+                _cb(f"[NOTE] {note}")
+                all_logs.append(f"\n[NOTE] {note}")
+
+            check = info.get("check", "")
+            if is_runtime_available(language):
+                all_logs.append(f"\n✅ {info['name']} is now available on PATH.")
             else:
-                _cb(f"[OK] Completed: {cmd_str}")
-                log_lines.append(f"[OK] Completed: {cmd_str}")
+                all_logs.append(
+                    f"\n⚠ Install completed but '{check}' is still not found on PATH.\n"
+                    "  Close and reopen this app (or log off/on) to apply the new PATH."
+                )
+            return True, "\n".join(all_logs)
 
-        except subprocess.TimeoutExpired:
-            log_lines.append(f"[ERROR] Timed out after 5 minutes: {cmd_str}")
-            _cb("[ERROR] Install step timed out.")
-            return False, "\n".join(log_lines)
-        except FileNotFoundError as exc:
-            log_lines.append(f"[ERROR] Command not found: {exc}")
-            _cb(f"[ERROR] Command not found: {exc}")
-            return False, "\n".join(log_lines)
-        except Exception as exc:
-            log_lines.append(f"[ERROR] Unexpected error: {exc}")
-            _cb(f"[ERROR] {exc}")
-            return False, "\n".join(log_lines)
-
-    # Verify the binary is now visible on PATH
-    if is_runtime_available(language):
-        log_lines.append(f"\n✅ {info['name']} is now available on PATH.")
-    else:
-        log_lines.append(
-            f"\n⚠ Install steps completed but '{info['check']}' is still not found on PATH.\n"
-            "  You may need to restart your system or open a new terminal session\n"
-            "  for the PATH change to take effect."
-        )
-
-    return True, "\n".join(log_lines)
+    # All strategies failed or were skipped
+    url = info.get("url", "")
+    all_logs.append(
+        f"\n❌ Could not auto-install {info.get('name', language)}.\n"
+        f"   Possible fixes:\n"
+        f"   • Install winget:  https://aka.ms/winget\n"
+        f"   • Install Chocolatey:  https://chocolatey.org/install\n"
+        f"   • Manual download:  {url}"
+    )
+    return False, "\n".join(all_logs)
 
 
 # ── Matplotlib plot-capture ───────────────────────────────────────

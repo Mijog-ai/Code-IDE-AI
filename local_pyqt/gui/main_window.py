@@ -52,6 +52,38 @@ TEXT_MUTED  = "#a8a29e"
 GREEN       = "#16a34a"
 RED         = "#dc2626"
 
+# ── Language display name → internal key ─────────────────────────
+# Internal key must match LANGUAGE_CONFIG in code_runner.py and
+# the _PROMPTS dict in prompts.py.
+_LANG_DISPLAY_MAP: dict[str, str] = {
+    "python":           "python",
+    "php":              "php",
+    "c# / asp.net":     "csharp",
+    "kotlin":           "kotlin",
+    "flutter / dart":   "dart",
+    "visual foxpro":    "foxpro",
+}
+
+# Internal key → file extension (for editor placeholder)
+_LANG_EXT: dict[str, str] = {
+    "python":  ".py",
+    "php":     ".php",
+    "csharp":  ".csx",
+    "kotlin":  ".kts",
+    "dart":    ".dart",
+    "foxpro":  ".prg",
+}
+
+# Internal key → comment prefix (for editor placeholder text)
+_LANG_COMMENT: dict[str, str] = {
+    "python":  "#",
+    "php":     "//",
+    "csharp":  "//",
+    "kotlin":  "//",
+    "dart":    "//",
+    "foxpro":  "*",
+}
+
 APP_STYLE = f"""
 QMainWindow, QWidget {{
     background-color: {BG_APP};
@@ -389,6 +421,34 @@ class CodeRunnerWorker(QThread):
         return 15 + int(self._install_count / n * 50)
 
 
+class RuntimeInstallerWorker(QThread):
+    """
+    Installs a language runtime (e.g. Dart SDK, Kotlin, dotnet-script)
+    using winget in a background thread.
+
+    Signals:
+        progress(str)         — incremental log line
+        finished(bool, str)   — (success, full_log)
+    """
+    progress = pyqtSignal(str)
+    finished = pyqtSignal(bool, str)   # success, log
+
+    def __init__(self, language: str, parent=None) -> None:
+        super().__init__(parent)
+        self.language = language
+
+    def run(self) -> None:
+        try:
+            from code_runner import install_runtime
+            success, log = install_runtime(
+                self.language,
+                progress_cb=lambda msg: self.progress.emit(msg),
+            )
+            self.finished.emit(success, log)
+        except Exception as exc:
+            self.finished.emit(False, str(exc))
+
+
 # ─────────────────────────────────────────────────────────────────
 # Main window
 # ─────────────────────────────────────────────────────────────────
@@ -649,9 +709,12 @@ class MainWindow(QMainWindow):
 
         # Language selector — replaces the old static "Python 3" badge
         self.lang_combo = QComboBox()
-        self.lang_combo.addItems(["Python", "PHP"])
+        self.lang_combo.addItems([
+            "Python", "PHP", "C# / ASP.NET", "Kotlin", "Flutter / Dart",
+            "Visual FoxPro",
+        ])
         self.lang_combo.setFixedHeight(26)
-        self.lang_combo.setFixedWidth(100)
+        self.lang_combo.setFixedWidth(150)
         self.lang_combo.setStyleSheet(
             f"QComboBox {{"
             f"  background-color: #fef3c7; color: {ACCENT};"
@@ -723,6 +786,15 @@ class MainWindow(QMainWindow):
         self.run_btn.setObjectName("runBtn")
         self.run_btn.clicked.connect(self._on_run)
         top_lay.addWidget(self.run_btn)
+
+        # Warning shown when the selected language runtime is not on PATH
+        self.runtime_warn_lbl = QLabel("")
+        self.runtime_warn_lbl.setStyleSheet(
+            f"color: {RED}; font-size: 11px; padding: 1px 0;"
+        )
+        self.runtime_warn_lbl.setWordWrap(True)
+        self.runtime_warn_lbl.setVisible(False)
+        top_lay.addWidget(self.runtime_warn_lbl)
 
         vsplit.addWidget(top_pane)
 
@@ -1006,7 +1078,9 @@ class MainWindow(QMainWindow):
 
     def _on_language_changed(self, lang_display: str) -> None:
         """Switch the active language and update the syntax highlighter."""
-        self._language = lang_display.lower()   # "python" | "php"
+        self._language = _LANG_DISPLAY_MAP.get(
+            lang_display.lower(), lang_display.lower()
+        )
 
         # Detach the old highlighter and attach the new one
         from gui.highlighter import make_highlighter
@@ -1017,11 +1091,33 @@ class MainWindow(QMainWindow):
         )
 
         # Update placeholder text to match language
-        ext = {"python": ".py", "php": ".php"}.get(self._language, "")
+        ext     = _LANG_EXT.get(self._language, "")
+        comment = _LANG_COMMENT.get(self._language, "//")
         self.code_editor.setPlaceholderText(
-            f"# Generated {lang_display} code will appear here ({ext})…\n"
-            "# You can edit it before running."
+            f"{comment} Generated {lang_display} code will appear here ({ext})…\n"
+            f"{comment} You can edit it before running."
         )
+
+        # Show / hide the runtime-missing warning label
+        from code_runner import is_runtime_available, RUNTIME_INFO
+        if not is_runtime_available(self._language):
+            info = RUNTIME_INFO.get(self._language, {})
+            check = info.get("check", self._language)
+            if info.get("cannot_install"):
+                warn = (
+                    f"⚠ '{check}' not found — {lang_display} cannot be auto-installed. "
+                    "Click ▶ Run for manual instructions."
+                )
+            else:
+                warn = (
+                    f"⚠ '{check}' not found on PATH — "
+                    "click ▶ Run Code and choose to install automatically."
+                )
+            self.runtime_warn_lbl.setText(warn)
+            self.runtime_warn_lbl.setVisible(True)
+        else:
+            self.runtime_warn_lbl.setVisible(False)
+
         self.statusBar().showMessage(f"Language: {lang_display}")
 
     # ─────────────────────────────────────────────────────────────
@@ -1169,6 +1265,62 @@ class MainWindow(QMainWindow):
     # ─────────────────────────────────────────────────────────────
 
     def _on_run(self) -> None:
+        """
+        Entry point for the Run button.
+
+        1. If the runtime for the selected language is missing:
+             a. VFP / cannot-install  → show manual instructions dialog, stop.
+             b. Otherwise             → ask user if they want to auto-install,
+                                        start RuntimeInstallerWorker on Yes.
+        2. Runtime is present → call _run_code() directly.
+        """
+        code = self.code_editor.toPlainText().strip()
+        if not code or self._is_running:
+            return
+
+        from code_runner import is_runtime_available, RUNTIME_INFO
+
+        if not is_runtime_available(self._language):
+            info  = RUNTIME_INFO.get(self._language, {})
+            name  = info.get("name", self._language.upper())
+            check = info.get("check", self._language)
+
+            if info.get("cannot_install"):
+                # Show manual instructions — no install possible
+                QMessageBox.information(
+                    self,
+                    f"{name} — Manual Install Required",
+                    info.get(
+                        "manual_note",
+                        f"'{check}' is not on PATH.\n"
+                        f"Please install {name} manually.\n\n"
+                        f"Download: {info.get('url', '')}",
+                    ),
+                )
+                return
+
+            # Ask the user whether to auto-install
+            url  = info.get("url", "")
+            reply = QMessageBox.question(
+                self,
+                f"Install {name}?",
+                f"'{check}' was not found on PATH.\n\n"
+                f"Would you like to install {name} automatically?\n\n"
+                f"This uses winget (Windows Package Manager) and may take\n"
+                f"a few minutes depending on your internet connection.\n\n"
+                f"Manual install: {url}",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self._start_runtime_install()
+            return
+
+        # Runtime is available — run immediately
+        self._run_code()
+
+    def _run_code(self) -> None:
+        """Start CodeRunnerWorker for the current code and language."""
         code = self.code_editor.toPlainText().strip()
         if not code or self._is_running:
             return
@@ -1185,6 +1337,73 @@ class MainWindow(QMainWindow):
         self._runner.finished.connect(self._on_run_done)
         self._runner.error.connect(self._on_run_error)
         self._runner.start()
+
+    # ─────────────────────────────────────────────────────────────
+    # Runtime installer agent
+    # ─────────────────────────────────────────────────────────────
+
+    def _start_runtime_install(self) -> None:
+        """Launch RuntimeInstallerWorker and show progress in the output panel."""
+        from code_runner import RUNTIME_INFO
+        info = RUNTIME_INFO.get(self._language, {})
+        name = info.get("name", self._language.upper())
+
+        self.run_btn.setEnabled(False)
+        self.generate_btn.setEnabled(False)
+        self.output_display.clear()
+        self._set_progress(0, f"Installing {name}…")
+        self._append_output(
+            f"⚙ Installing {name} via winget — please wait…\n"
+            f"{'─' * 44}"
+        )
+
+        self._runtime_installer = RuntimeInstallerWorker(self._language)
+        self._runtime_installer.progress.connect(self._on_runtime_install_progress)
+        self._runtime_installer.finished.connect(self._on_runtime_install_done)
+        self._runtime_installer.start()
+
+    def _on_runtime_install_progress(self, msg: str) -> None:
+        self._append_output(msg)
+        short = msg[:70].strip()
+        self._set_progress(50, short or "Installing…")
+
+    def _on_runtime_install_done(self, success: bool, log: str) -> None:
+        from code_runner import RUNTIME_INFO
+        info = RUNTIME_INFO.get(self._language, {})
+        name = info.get("name", self._language.upper())
+        url  = info.get("url", "")
+
+        self.run_btn.setEnabled(True)
+        self._update_generate_btn_state()
+
+        if success:
+            self._set_progress(100, f"{name} installed.")
+            self._append_output(f"\n{'─' * 44}")
+            self._append_output(f"✅ {name} installed successfully!")
+            self.runtime_warn_lbl.setVisible(False)
+
+            reply = QMessageBox.question(
+                self,
+                "Runtime Installed",
+                f"{name} was installed successfully.\n\n"
+                "Note: If the runtime is still not found, you may need to\n"
+                "restart this application or open a new terminal session.\n\n"
+                "Run your code now?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self._run_code()
+        else:
+            self._set_progress(0, "Installation failed.")
+            self._append_output(f"\n{'─' * 44}")
+            self._append_output(
+                f"❌ Installation failed — see log above.", is_error=True
+            )
+            if url:
+                self._append_output(
+                    f"\n📥 Install manually: {url}"
+                )
 
     def _on_run_done(self, result) -> None:
         from code_runner import format_output

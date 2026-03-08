@@ -9,6 +9,7 @@ import importlib
 import importlib.util
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -90,7 +91,185 @@ LANGUAGE_CONFIG: dict[str, dict] = {
         "cmd": lambda: ["php"],
         "ext": ".php",
     },
+    # C# / ASP.NET — requires: dotnet tool install -g dotnet-script
+    "csharp": {
+        "cmd": lambda: ["dotnet-script"],
+        "ext": ".csx",
+    },
+    # Kotlin — requires: kotlinc on PATH (https://kotlinlang.org/docs/command-line.html)
+    "kotlin": {
+        "cmd": lambda: ["kotlinc", "-script"],
+        "ext": ".kts",
+    },
+    # Flutter / Dart — requires: dart on PATH (https://dart.dev/get-dart)
+    # Standalone Dart scripts run directly; Flutter app code needs `flutter run`
+    "dart": {
+        "cmd": lambda: ["dart"],
+        "ext": ".dart",
+    },
+    # Visual FoxPro — requires VFP9 runtime on PATH.
+    # vfp9.exe does not support clean headless script execution;
+    # code generation works fully but Run Code will show an error if
+    # vfp9 is not on PATH — open the .prg in the VFP IDE instead.
+    "foxpro": {
+        "cmd": lambda: ["vfp9", "-t"],
+        "ext": ".prg",
+    },
 }
+
+
+# ── Runtime availability & auto-install ──────────────────────────
+# Each entry describes HOW to install the runtime for a language.
+# "steps" is an ordered list of commands; they are run sequentially.
+# "cannot_install" marks runtimes that must be installed manually.
+
+RUNTIME_INFO: dict[str, dict] = {
+    "php": {
+        "name":    "PHP 8",
+        "check":   "php",
+        "steps": [
+            ["winget", "install", "PHP.PHP.8.3",
+             "--accept-source-agreements", "--accept-package-agreements"],
+        ],
+        "cannot_install": False,
+        "url": "https://www.php.net/downloads",
+    },
+    "csharp": {
+        "name":    "dotnet-script (C# scripting)",
+        "check":   "dotnet-script",
+        "steps": [
+            # Step 1: install .NET SDK (required before dotnet tool install)
+            ["winget", "install", "Microsoft.DotNet.SDK.8",
+             "--accept-source-agreements", "--accept-package-agreements"],
+            # Step 2: install dotnet-script global tool
+            ["dotnet", "tool", "install", "-g", "dotnet-script"],
+        ],
+        "cannot_install": False,
+        "url": "https://github.com/dotnet-script/dotnet-script",
+    },
+    "kotlin": {
+        "name":    "Kotlin (kotlinc)",
+        "check":   "kotlinc",
+        "steps": [
+            ["winget", "install", "JetBrains.Kotlin",
+             "--accept-source-agreements", "--accept-package-agreements"],
+        ],
+        "cannot_install": False,
+        "url": "https://kotlinlang.org/docs/command-line.html",
+    },
+    "dart": {
+        "name":    "Dart SDK",
+        "check":   "dart",
+        "steps": [
+            ["winget", "install", "Dart.Dart",
+             "--accept-source-agreements", "--accept-package-agreements"],
+        ],
+        "cannot_install": False,
+        "url": "https://dart.dev/get-dart",
+    },
+    "foxpro": {
+        "name":    "Visual FoxPro 9",
+        "check":   "vfp9",
+        "steps":   [],
+        "cannot_install": True,
+        "url": "https://vfpx.github.io/",
+        "manual_note": (
+            "Visual FoxPro 9 is a legacy product and cannot be installed automatically.\n\n"
+            "Options:\n"
+            "  • Download the free VFP9 SP2 runtime from https://vfpx.github.io/\n"
+            "  • Open the generated .prg file directly in the Visual FoxPro 9 IDE\n\n"
+            "Code generation and editing work fully — only ▶ Run Code requires the runtime."
+        ),
+    },
+}
+
+
+def is_runtime_available(language: str) -> bool:
+    """Return True if the runtime for *language* is on PATH (or is Python itself)."""
+    if language == "python":
+        return True
+    cfg = LANGUAGE_CONFIG.get(language)
+    if cfg is None:
+        return False
+    return shutil.which(cfg["cmd"]()[0]) is not None
+
+
+def install_runtime(
+    language: str,
+    progress_cb=None,
+) -> tuple[bool, str]:
+    """
+    Run the sequential install steps for *language*'s runtime.
+
+    Each step is a command list passed to subprocess.run().
+    Progress messages are emitted via *progress_cb(msg)* if provided.
+
+    Returns:
+        (success: bool, log: str)
+        success is True when all steps finished without error codes.
+        Even on success the caller should warn the user to restart their
+        terminal so the new PATH entry is visible.
+    """
+    def _cb(msg: str) -> None:
+        if progress_cb:
+            progress_cb(msg)
+
+    info = RUNTIME_INFO.get(language)
+    if info is None:
+        return False, f"No install info registered for language: {language!r}"
+
+    if info.get("cannot_install"):
+        return False, info.get("manual_note", "This runtime cannot be installed automatically.")
+
+    log_lines: list[str] = []
+
+    for step in info["steps"]:
+        cmd_str = " ".join(step)
+        _cb(f"[INSTALL] Running: {cmd_str}")
+        log_lines.append(f"[INSTALL] Running: {cmd_str}")
+
+        try:
+            result = subprocess.run(
+                step,
+                capture_output=True,
+                text=True,
+                timeout=300,          # 5 minutes per step
+            )
+            if result.stdout.strip():
+                log_lines.append(result.stdout.strip())
+            if result.returncode != 0:
+                err = result.stderr.strip() or f"Exit code {result.returncode}"
+                log_lines.append(f"[ERROR] {err}")
+                _cb(f"[ERROR] Step failed: {cmd_str}")
+                return False, "\n".join(log_lines)
+            else:
+                _cb(f"[OK] Completed: {cmd_str}")
+                log_lines.append(f"[OK] Completed: {cmd_str}")
+
+        except subprocess.TimeoutExpired:
+            log_lines.append(f"[ERROR] Timed out after 5 minutes: {cmd_str}")
+            _cb("[ERROR] Install step timed out.")
+            return False, "\n".join(log_lines)
+        except FileNotFoundError as exc:
+            log_lines.append(f"[ERROR] Command not found: {exc}")
+            _cb(f"[ERROR] Command not found: {exc}")
+            return False, "\n".join(log_lines)
+        except Exception as exc:
+            log_lines.append(f"[ERROR] Unexpected error: {exc}")
+            _cb(f"[ERROR] {exc}")
+            return False, "\n".join(log_lines)
+
+    # Verify the binary is now visible on PATH
+    if is_runtime_available(language):
+        log_lines.append(f"\n✅ {info['name']} is now available on PATH.")
+    else:
+        log_lines.append(
+            f"\n⚠ Install steps completed but '{info['check']}' is still not found on PATH.\n"
+            "  You may need to restart your system or open a new terminal session\n"
+            "  for the PATH change to take effect."
+        )
+
+    return True, "\n".join(log_lines)
 
 
 # ── Matplotlib plot-capture ───────────────────────────────────────

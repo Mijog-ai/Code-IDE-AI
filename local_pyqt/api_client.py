@@ -13,12 +13,9 @@ PROVIDERS: dict[str, dict] = {
     "Groq": {
         "base_url": "https://api.groq.com/openai/v1",
         "fallback_models": [
-            "qwen-2.5-coder-32b",
+            "openai/gpt-oss-120b",
             "llama-3.3-70b-versatile",
             "llama-3.1-8b-instant",
-            "deepseek-r1-distill-llama-70b",
-            "gemma2-9b-it",
-            "mixtral-8x7b-32768",
         ],
     },
 }

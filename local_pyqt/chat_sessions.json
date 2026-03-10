@@ -1,6 +1,33 @@
 {
-  "last_session_idx": 3,
+  "last_session_idx": 0,
   "sessions": [
+    {
+      "name": "Chat 10",
+      "history": [
+        {
+          "role": "user",
+          "content": "•d=R_(T,K)  ∗cos⁡〖γ_p 〗∗(sin⁡ϕ∗tan⁡〖γ_c 〗  - sin⁡〖α 〗 (1-cos⁡ϕ) )/A \nA=(sin⁡〖γ_p 〗∗ (sin⁡ϕ  ∗tan⁡〖γ_c 〗  + cos⁡ϕ  ∗〖 sin〗⁡α )-cos⁡〖γ_p 〗∗cos⁡α )  ∗(sin⁡〖γ_p 〗∗tan⁡α  -cos⁡〖γ_p 〗 )\n\nthis is dispalcemenet i want that you provide the code to plot for phi 0-360, gamma_c =2 degree, alpha = 14 degree, R_(TK)= 43, and gamma_p as 0 and 5 with different gamma in same plot for comparision"
+        }
+      ]
+    },
+    {
+      "name": "Chat 9",
+      "history": [
+        {
+          "role": "user",
+          "content": "•d=R_(T,K)  ∗cos⁡〖γ_p 〗∗(sin⁡ϕ∗tan⁡〖γ_c 〗  - sin⁡〖α 〗 (1-cos⁡ϕ) )/A \nA=(sin⁡〖γ_p 〗∗ (sin⁡ϕ  ∗tan⁡〖γ_c 〗  + cos⁡ϕ  ∗〖 sin〗⁡α )-cos⁡〖γ_p 〗∗cos⁡α )  ∗(sin⁡〖γ_p 〗∗tan⁡α  -cos⁡〖γ_p 〗 )\n\nthis is dispalcemenet i want that you provide the code to plot for phi 0-360, gamma_c =2 degree, alpha = 14 degree, R_(TK)= 43, and gamma_p as 0 and 5 with different gamma in same plot for comparision"
+        }
+      ]
+    },
+    {
+      "name": "Chat 8",
+      "history": [
+        {
+          "role": "user",
+          "content": "•d=R_(T,K)  ∗cos⁡〖γ_p 〗∗(sin⁡ϕ∗tan⁡〖γ_c 〗  - sin⁡〖α 〗 (1-cos⁡ϕ) )/A \nA=(sin⁡〖γ_p 〗∗ (sin⁡ϕ  ∗tan⁡〖γ_c 〗  + cos⁡ϕ  ∗〖 sin〗⁡α )-cos⁡〖γ_p 〗∗cos⁡α )  ∗(sin⁡〖γ_p 〗∗tan⁡α  -cos⁡〖γ_p 〗 )\n\nthis is dispalcemenet i want that you provide the code to plot for phi 0-360, gamma_c =2 degree, alpha = 14 degree, R_(TK)= 43, and gamma_p as 0 and 5 with different gamma in same plot for comparision"
+        }
+      ]
+    },
     {
       "name": "Chat 7",
       "history": []
@@ -93,6 +120,14 @@
         {
           "role": "user",
           "content": "── stderr ──────────────────\nTraceback (most recent call last):\n  File \"C:\\Users\\mitga\\AppData\\Local\\Temp\\tmptedcef3j.py\", line 59, in <module>\n    displacements = [calculate_displacement(R_TK, gamma_p, alpha, phi, t) for t in times]\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\mitga\\AppData\\Local\\Temp\\tmptedcef3j.py\", line 59, in <listcomp>\n    displacements = [calculate_displacement(R_TK, gamma_p, alpha, phi, t) for t in times]\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nTypeError: calculate_displacement() takes 4 positional arguments but 5 were given"
+        },
+        {
+          "role": "user",
+          "content": "solve this"
+        },
+        {
+          "role": "user",
+          "content": "solve this"
         }
       ]
     },

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from threading import Thread
+from threading import Event, Thread
 from typing import Callable, Generator, Optional
 
 MODEL_CACHE_PATH = r"D:\LLMs\models--Qwen--Qwen2.5-Coder-7B-Instruct"
@@ -156,10 +156,14 @@ class LocalModel:
         messages: list[dict],
         max_new_tokens: int = 2048,
         temperature: float  = 0.3,
+        stop_event: Optional[Event] = None,
     ) -> Generator[str, None, None]:
         """
         Stream tokens from model.generate() running in a parallel daemon thread.
         torch.inference_mode() is applied inside the thread (not the caller).
+
+        If *stop_event* is set while iterating, the loop breaks and the
+        background generation thread is left to drain on its own (daemon).
         """
         import torch
         from transformers import TextIteratorStreamer
@@ -196,9 +200,14 @@ class LocalModel:
         gen_thread.start()
 
         for token_text in streamer:
+            if stop_event is not None and stop_event.is_set():
+                break
             yield token_text
 
-        gen_thread.join()
+        # Only join when we ran to completion; if stopped, the daemon thread
+        # finishes on its own without blocking the UI.
+        if stop_event is None or not stop_event.is_set():
+            gen_thread.join()
 
 
 # ── Singleton ─────────────────────────────────────────────────────

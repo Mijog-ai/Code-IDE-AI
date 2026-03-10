@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import os
+import threading
 
 from dotenv import load_dotenv
 from PyQt6.QtCore import Qt, QThread, QUrl, pyqtSignal
@@ -126,6 +127,24 @@ QPushButton#generateBtn {{
 QPushButton#generateBtn:hover   {{ background-color: #2C2520; border-color: #2C2520; }}
 QPushButton#generateBtn:pressed {{ background-color: #3D3530; border-color: #3D3530; }}
 QPushButton#generateBtn:disabled {{
+    background-color: transparent;
+    color: {TEXT_MUTED};
+    border: 1px solid {BORDER};
+}}
+QPushButton#stopBtn {{
+    background-color: {RED};
+    color: #FFFFFF;
+    border: 1px solid {RED};
+    font-weight: 600;
+    font-size: 13px;
+    min-height: 40px;
+    border-radius: 8px;
+    padding: 0px 20px;
+    letter-spacing: 0.3px;
+}}
+QPushButton#stopBtn:hover   {{ background-color: #7A1B28; border-color: #7A1B28; }}
+QPushButton#stopBtn:pressed {{ background-color: #5C1220; border-color: #5C1220; }}
+QPushButton#stopBtn:disabled {{
     background-color: transparent;
     color: {TEXT_MUTED};
     border: 1px solid {BORDER};
@@ -295,7 +314,12 @@ class CodeGeneratorWorker(QThread):
 
     def __init__(self, messages: list[dict], parent=None):
         super().__init__(parent)
-        self.messages = messages
+        self.messages    = messages
+        self._stop_event = threading.Event()
+
+    def stop(self) -> None:
+        """Signal the generation loop to exit on the next token."""
+        self._stop_event.set()
 
     def run(self) -> None:
         try:
@@ -305,14 +329,19 @@ class CodeGeneratorWorker(QThread):
             full_response = ""
             token_count   = 0
             self.progress.emit(20, "Generating code…")
-            for chunk in model.generate_stream(self.messages):
+            for chunk in model.generate_stream(self.messages, stop_event=self._stop_event):
+                if self._stop_event.is_set():
+                    break
                 full_response += chunk
                 token_count   += 1
                 self.token.emit(chunk)
                 if token_count % 8 == 0:
                     pct = min(85, 20 + int(token_count / 500 * 65))
                     self.progress.emit(pct, "Generating…")
-            self.progress.emit(100, "Generation complete.")
+            if self._stop_event.is_set():
+                self.progress.emit(100, "Generation stopped.")
+            else:
+                self.progress.emit(100, "Generation complete.")
             self.finished.emit(full_response)
         except Exception as exc:
             self.error.emit(str(exc))
@@ -327,9 +356,14 @@ class ApiGeneratorWorker(QThread):
 
     def __init__(self, messages: list[dict], api_key: str, model: str, parent=None):
         super().__init__(parent)
-        self.messages = messages
-        self.api_key  = api_key
-        self.model    = model
+        self.messages    = messages
+        self.api_key     = api_key
+        self.model       = model
+        self._stop_event = threading.Event()
+
+    def stop(self) -> None:
+        """Signal the generation loop to exit on the next token."""
+        self._stop_event.set()
 
     def run(self) -> None:
         try:
@@ -340,13 +374,18 @@ class ApiGeneratorWorker(QThread):
             token_count   = 0
             self.progress.emit(20, "Generating code…")
             for chunk in client.generate_stream(self.messages):
+                if self._stop_event.is_set():
+                    break
                 full_response += chunk
                 token_count   += 1
                 self.token.emit(chunk)
                 if token_count % 8 == 0:
                     pct = min(85, 20 + int(token_count / 500 * 65))
                     self.progress.emit(pct, "Generating…")
-            self.progress.emit(100, "Generation complete.")
+            if self._stop_event.is_set():
+                self.progress.emit(100, "Generation stopped.")
+            else:
+                self.progress.emit(100, "Generation complete.")
             self.finished.emit(full_response)
         except Exception as exc:
             self.error.emit(str(exc))
@@ -840,6 +879,14 @@ class MainWindow(QMainWindow):
         self.generate_btn.clicked.connect(self._on_generate)
         btn_row.addWidget(self.generate_btn)
 
+        self.stop_btn = QPushButton("⬛  Stop")
+        self.stop_btn.setObjectName("stopBtn")
+        self.stop_btn.setFixedHeight(42)
+        self.stop_btn.setMinimumWidth(110)
+        self.stop_btn.setVisible(False)
+        self.stop_btn.clicked.connect(self._on_stop_generation)
+        btn_row.addWidget(self.stop_btn)
+
         in_lay.addLayout(btn_row)
         lay.addWidget(input_area)
         return page
@@ -1168,7 +1215,9 @@ class MainWindow(QMainWindow):
                 return
 
         self._is_generating = True
-        self.generate_btn.setEnabled(False)
+        self.generate_btn.setVisible(False)
+        self.stop_btn.setVisible(True)
+        self.stop_btn.setEnabled(True)
         self.run_btn.setEnabled(False)
         self.code_editor.clear()
         self._streamed_buf = ""
@@ -1196,6 +1245,13 @@ class MainWindow(QMainWindow):
         self._generator.finished.connect(self._on_generation_done)
         self._generator.error.connect(self._on_generation_error)
         self._generator.start()
+
+    def _on_stop_generation(self) -> None:
+        """Called when the user clicks the Stop button during generation."""
+        if self._generator is not None:
+            self.stop_btn.setEnabled(False)
+            self.stop_btn.setText("⬛  Stopping…")
+            self._generator.stop()
 
     def _on_gen_progress(self, pct: int, msg: str) -> None:
         self._progress_bar.setValue(pct)
@@ -1234,16 +1290,33 @@ class MainWindow(QMainWindow):
         self._save_sessions()
 
         self._progress_bar.setValue(100)
-        self._set_status("Code generated — review in Code tab, then click ▶ Run")
+        was_stopped = (
+            self._generator is not None
+            and self._generator._stop_event.is_set()
+        )
+        self._set_status(
+            "Generation stopped — partial code in editor."
+            if was_stopped else
+            "Code generated — review in Code tab, then click ▶ Run"
+        )
         self._is_generating = False
-        self.generate_btn.setEnabled(True)
+        self.stop_btn.setVisible(False)
+        self.stop_btn.setText("⬛  Stop")
+        self.stop_btn.setEnabled(True)
+        self.generate_btn.setVisible(True)
+        self._update_generate_btn_state()
         self.run_btn.setEnabled(True)
-        self.prompt_input.clear()
+        if not was_stopped:
+            self.prompt_input.clear()
         self._switch_tab(1)
 
     def _on_generation_error(self, err: str) -> None:
         self._is_generating = False
-        self.generate_btn.setEnabled(True)
+        self.stop_btn.setVisible(False)
+        self.stop_btn.setText("⬛  Stop")
+        self.stop_btn.setEnabled(True)
+        self.generate_btn.setVisible(True)
+        self._update_generate_btn_state()
         self.run_btn.setEnabled(True)
         self._progress_bar.setValue(0)
         self._set_status(f"Error: {err[:80]}")

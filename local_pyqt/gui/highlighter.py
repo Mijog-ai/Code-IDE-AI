@@ -1,6 +1,7 @@
 # gui/highlighter.py
 # Syntax highlighters for QPlainTextEdit.
-# Supports: Python, PHP, C# / ASP.NET, Kotlin, Flutter / Dart.
+# Supports: Python, PHP, C# / ASP.NET, Kotlin, Flutter / Dart,
+#           Visual FoxPro, JavaScript, TypeScript, Go.
 
 from __future__ import annotations
 
@@ -432,7 +433,7 @@ _FOXPRO_RULES: list[tuple[str, QTextCharFormat]] = [
     (r"\[[^\]]*\]",                             _fmt("#16a34a")),
 
     # Boolean / null literals  .T.  .F.  .NULL.  .Y.  .N.
-    (r"\.[TFYN]\.|\.NULL\.",                    _fmt("#7c3aed", bold=True)),
+    (r"\.[TFYN]\.|\\.NULL\\.",                    _fmt("#7c3aed", bold=True)),
 
     # Keywords (case-insensitive flag set on each pattern via QRegularExpression)
     (

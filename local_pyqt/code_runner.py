@@ -1,10 +1,12 @@
 # code_runner.py
-# Detects imports, auto-installs missing packages, then executes Python code.
+# Detects imports, auto-installs missing packages, then executes code.
+# Supports Python natively; routes other languages via their system runtime.
 
 import importlib
 import importlib.util
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -22,6 +24,80 @@ class RunResult:
     timed_out: bool = False
     installed_packages: list = field(default_factory=list)
     plot_files: list = field(default_factory=list)
+
+
+# ── Runtime information for non-Python languages ─────────────────
+
+RUNTIME_INFO: dict[str, dict] = {
+    "javascript": {
+        "name":    "Node.js",
+        "check":   "node",
+        "winget":  "OpenJS.NodeJS.LTS",
+        "url":     "https://nodejs.org/",
+        "ext":     ".js",
+        "run":     ["node", "{file}"],
+    },
+}
+
+
+def is_runtime_available(language: str) -> bool:
+    """Return True if the runtime for *language* is present on PATH."""
+    if language == "python":
+        return True
+    info = RUNTIME_INFO.get(language, {})
+    check = info.get("check", language)
+    return shutil.which(check) is not None
+
+
+def install_runtime(language: str, progress_cb=None) -> tuple[bool, str]:
+    """
+    Attempt to install the runtime for *language* via winget.
+    Returns (success, log_text).
+    """
+    def _cb(msg: str) -> None:
+        if progress_cb:
+            progress_cb(msg)
+
+    info = RUNTIME_INFO.get(language, {})
+    winget_id = info.get("winget", "")
+    if not winget_id:
+        return False, f"No automatic installer available for {language}."
+
+    name = info.get("name", language.upper())
+    _cb(f"Running: winget install --id {winget_id} -e …")
+
+    try:
+        result = subprocess.run(
+            [
+                "winget", "install",
+                "--id", winget_id,
+                "-e",
+                "--accept-package-agreements",
+                "--accept-source-agreements",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        log = result.stdout + result.stderr
+        _cb(log)
+        success = result.returncode == 0
+
+        # For C# / dotnet-script: install as global tool after SDK
+        if success and language == "csharp":
+            _cb("Installing dotnet-script global tool…")
+            r2 = subprocess.run(
+                ["dotnet", "tool", "install", "-g", "dotnet-script"],
+                capture_output=True, text=True, timeout=120,
+            )
+            log += "\n" + r2.stdout + r2.stderr
+
+        return success, log
+    except FileNotFoundError:
+        msg = "winget not found — please install winget or the runtime manually."
+        return False, msg
+    except subprocess.TimeoutExpired:
+        return False, "Installation timed out after 5 minutes."
 
 
 # ── Import-name → pip-name mapping ───────────────────────────────
@@ -166,17 +242,88 @@ def install_package(pip_name: str) -> tuple[bool, str]:
     return result.returncode == 0, result.stdout + result.stderr
 
 
+# ── Non-Python code execution ─────────────────────────────────────
+
+def _run_other_language(
+    code: str,
+    language: str,
+    timeout: int = 60,
+    progress_cb=None,
+) -> RunResult:
+    """Execute code for a non-Python language via its system runtime."""
+    def _cb(msg: str) -> None:
+        if progress_cb:
+            progress_cb(msg)
+
+    info = RUNTIME_INFO.get(language, {})
+    run_cmd = info.get("run", [])
+    ext     = info.get("ext", ".txt")
+
+    if not run_cmd:
+        return RunResult(
+            success=False,
+            stdout="",
+            stderr=f"No runner configured for '{language}'.",
+            exit_code=-1,
+        )
+
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=ext, delete=False, encoding="utf-8"
+    )
+    try:
+        tmp.write(code)
+        tmp.flush()
+        tmp.close()
+
+        cmd = [c.replace("{file}", tmp.name) for c in run_cmd]
+        _cb(f"Executing {info.get('name', language.upper())} code…")
+
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout
+        )
+        return RunResult(
+            success=result.returncode == 0,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            exit_code=result.returncode,
+        )
+
+    except subprocess.TimeoutExpired:
+        return RunResult(
+            success=False,
+            stdout="",
+            stderr=f"⏱ Timed out after {timeout}s — check for infinite loops.",
+            exit_code=-1,
+            timed_out=True,
+        )
+    except Exception as exc:
+        return RunResult(
+            success=False,
+            stdout="",
+            stderr=f"Failed to launch process: {exc}",
+            exit_code=-1,
+        )
+    finally:
+        if os.path.exists(tmp.name):
+            os.unlink(tmp.name)
+
+
 # ── Code execution ────────────────────────────────────────────────
 
 def run_python_code(
     code: str,
     timeout: int = 60,
     progress_cb=None,
+    language: str = "python",
 ) -> RunResult:
     """
     Full pipeline: detect missing packages → auto-install → execute.
-    Matplotlib figures are captured and returned as PNGs.
+    Routes non-Python languages to their system runtime.
+    Matplotlib figures are captured and returned as PNGs (Python only).
     """
+    if language != "python":
+        return _run_other_language(code, language, timeout, progress_cb)
+
     def _cb(msg: str) -> None:
         if progress_cb:
             progress_cb(msg)

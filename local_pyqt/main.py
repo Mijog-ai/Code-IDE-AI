@@ -49,8 +49,8 @@ from gui.main_window import MainWindow
 
 def main() -> None:
     app = QApplication(sys.argv)
-    app.setApplicationName("AI Coder IDE — Local")
-    app.setOrganizationName("AICoderIDE")
+    app.setApplicationName("Coder_AI — Inline-Hydraulik")
+    app.setOrganizationName("Inline-Hydraulik")
 
     default_font = QFont("Segoe UI", 10)
     app.setFont(default_font)
@@ -63,3 +63,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

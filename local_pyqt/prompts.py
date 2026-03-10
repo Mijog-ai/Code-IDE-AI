@@ -27,6 +27,16 @@ _BASE_RULES = """
 - Never apologize or add filler phrases like "Certainly!" or "Of course!"
 """
 
+_CONTINUATION_REMINDER = """## CONTINUATION MODE — THIS IS A FOLLOW-UP REQUEST
+The conversation already contains code that was written earlier in this session.
+You MUST follow these rules:
+- DO NOT rewrite the entire code from scratch.
+- ONLY apply the changes the user is asking for.
+- Keep all existing logic, structure, and variable names that are not being changed.
+- Output the FULL updated file (with your targeted edits applied), not just the changed lines.
+- If the user's request is unclear, ask for clarification instead of guessing.
+"""
+
 _PYTHON_PROMPT = f"""You are an expert Python software engineer and coding assistant \
 built into an AI-powered coding IDE.
 
@@ -66,8 +76,25 @@ def get_system_prompt(language: str = "python") -> str:
 
 
 def build_messages(chat_history: list[dict], language: str = "python") -> list[dict]:
-    """Prepend the appropriate system prompt to *chat_history*."""
-    return [{"role": "system", "content": get_system_prompt(language)}] + chat_history
+    """Prepend the appropriate system prompt to *chat_history*.
+
+    When the conversation already has prior messages (continuation), an extra
+    system reminder is injected right before the latest user turn so that
+    local/smaller models clearly understand they must edit existing code
+    rather than rewrite everything from scratch.
+    """
+    system_msg = {"role": "system", "content": get_system_prompt(language)}
+    is_continuation = len(chat_history) > 1  # more than just the first user message
+
+    if is_continuation:
+        # Inject the continuation reminder as a second system message
+        # placed just before the last user turn so it stays in recent context.
+        reminder_msg = {"role": "system", "content": _CONTINUATION_REMINDER}
+        # Insert before the final user message for maximum recency effect
+        *earlier, last = chat_history
+        return [system_msg] + earlier + [reminder_msg, last]
+
+    return [system_msg] + chat_history
 
 
 def extract_code(response: str, language: str = "python") -> str:

@@ -149,6 +149,24 @@ QPushButton#stopBtn:disabled {{
     color: {TEXT_MUTED};
     border: 1px solid {BORDER};
 }}
+QPushButton#agentBtn {{
+    background-color: {SURFACE};
+    color: {TEXT_SEC};
+    border: 1px solid {BORDER};
+    border-radius: 8px;
+    padding: 7px 14px;
+    font-weight: 500;
+    font-size: 13px;
+    min-height: 36px;
+}}
+QPushButton#agentBtn:hover {{ background-color: {SIDEBAR_HOV}; color: {TEXT_PRI}; }}
+QPushButton#agentBtn[active="true"] {{
+    background-color: #0F766E;
+    color: #FFFFFF;
+    border-color: #0F766E;
+    font-weight: 600;
+}}
+QPushButton#agentBtn[active="true"]:hover {{ background-color: #0D6961; border-color: #0D6961; }}
 QPushButton#runBtn {{
     background-color: {SURFACE};
     color: {TEXT_PRI};
@@ -705,9 +723,10 @@ class MainWindow(QMainWindow):
         self._local_model_loaded = False
 
         # ── App state ────────────────────────────────────────────────
-        self._is_generating = False
-        self._is_running    = False
-        self._streamed_buf  = ""
+        self._is_generating      = False
+        self._is_running         = False
+        self._streamed_buf       = ""
+        self._web_search_enabled = False
 
         # ── Session management ───────────────────────────────────────
         self._sessions: list[dict] = []
@@ -863,6 +882,17 @@ class MainWindow(QMainWindow):
         clear_chat_btn.clicked.connect(self._clear_chat)
         btn_row.addWidget(clear_chat_btn)
         btn_row.addStretch()
+
+        self.agent_btn = QPushButton("🌐 Agent")
+        self.agent_btn.setObjectName("agentBtn")
+        self.agent_btn.setFixedHeight(36)
+        self.agent_btn.setToolTip(
+            "Toggle AI agent with DuckDuckGo web search.\n"
+            "When ON, the model can search the web to answer your question."
+        )
+        self.agent_btn.setProperty("active", "false")
+        self.agent_btn.clicked.connect(self._on_agent_toggle)
+        btn_row.addWidget(self.agent_btn)
 
         self._key_warn_lbl = QLabel("⚠ Set GROQ_API_KEY in your .env file")
         self._key_warn_lbl.setStyleSheet(
@@ -1233,6 +1263,14 @@ class MainWindow(QMainWindow):
 
         if self._mode == "local":
             self._generator = CodeGeneratorWorker(messages=messages)
+        elif self._web_search_enabled:
+            from agent import AgentWorker
+            self._generator = AgentWorker(
+                messages=messages,
+                api_key=self._api_key,
+                model=self._api_model or self._sidebar.model_combo.currentText(),
+            )
+            self._generator.status.connect(self._on_agent_status)
         else:
             self._generator = ApiGeneratorWorker(
                 messages=messages,
@@ -1245,6 +1283,30 @@ class MainWindow(QMainWindow):
         self._generator.finished.connect(self._on_generation_done)
         self._generator.error.connect(self._on_generation_error)
         self._generator.start()
+
+    def _on_agent_toggle(self) -> None:
+        """Toggle the web-search agent mode on/off."""
+        self._web_search_enabled = not self._web_search_enabled
+        active = "true" if self._web_search_enabled else "false"
+        self.agent_btn.setProperty("active", active)
+        self.agent_btn.style().unpolish(self.agent_btn)
+        self.agent_btn.style().polish(self.agent_btn)
+        if self._web_search_enabled:
+            self.prompt_input.setPlaceholderText(
+                "Agent mode ON — ask anything. The AI will search DuckDuckGo if needed…"
+            )
+            self._set_status("🌐 Agent mode ON — web search enabled")
+        else:
+            self.prompt_input.setPlaceholderText(
+                "Ask me to write Python code… e.g. \"Build a REST API with FastAPI\""
+            )
+            self._set_status("Agent mode OFF")
+
+    def _on_agent_status(self, msg: str) -> None:
+        """Show agent status (e.g. search queries) in the status bar and chat."""
+        self._set_status(msg)
+        if msg.startswith("🔍"):
+            self._append_history("Agent", msg, is_user=False)
 
     def _on_stop_generation(self) -> None:
         """Called when the user clicks the Stop button during generation."""
